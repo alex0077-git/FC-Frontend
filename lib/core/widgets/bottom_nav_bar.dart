@@ -17,8 +17,9 @@ class BottomNavBar extends ConsumerWidget {
     final connected = ref.watch(telemetryConnectionProvider);
     final statusColors = Theme.of(context).extension<AppStatusColors>()!;
 
+    final colors = Theme.of(context).colorScheme;
     return Material(
-      color: AppTheme.surface,
+      color: colors.surface,
       child: SafeArea(
         top: false,
         child: SizedBox(
@@ -84,7 +85,7 @@ class BottomNavBar extends ConsumerWidget {
       context: navigatorContext,
       useRootNavigator: false,
       isScrollControlled: true,
-      backgroundColor: AppTheme.surface,
+      backgroundColor: Theme.of(navigatorContext).colorScheme.surface,
       showDragHandle: true,
       builder: (context) => const ConnectPanel(),
     );
@@ -100,7 +101,7 @@ class BottomNavBar extends ConsumerWidget {
       context: navigatorContext,
       useRootNavigator: false,
       isScrollControlled: true,
-      backgroundColor: AppTheme.surface,
+      backgroundColor: Theme.of(navigatorContext).colorScheme.surface,
       showDragHandle: true,
       builder: (sheetContext) {
         return _SettingsMenu(
@@ -169,7 +170,8 @@ class _NavIconButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final color = selected ? AppTheme.primary : AppTheme.text;
+    final scheme = Theme.of(context).colorScheme;
+    final color = selected ? scheme.primary : scheme.onSurface;
     return IconButton(
       tooltip: tooltip,
       onPressed: onPressed,

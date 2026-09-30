@@ -13,6 +13,12 @@ class AppStatusColors extends ThemeExtension<AppStatusColors> {
     statusCritical: Color(0xFFEF4444),
   );
 
+  static const AppStatusColors light = AppStatusColors(
+    statusGood: Color(0xFF16A34A),
+    statusWarning: Color(0xFFD97706),
+    statusCritical: Color(0xFFDC2626),
+  );
+
   final Color statusGood;
   final Color statusWarning;
   final Color statusCritical;
@@ -54,6 +60,31 @@ class AppTheme {
   static const Color surface = Color(0xFF121A2B);
   static const Color primary = Color(0xFF3B82F6);
   static const Color text = Color(0xFFE8EDF5);
+
+  static const Color lightBackground = Color(0xFFF3F6FB);
+  static const Color lightSurface = Color(0xFFFFFFFF);
+  static const Color lightText = Color(0xFF0B1220);
+
+  static ThemeData get light {
+    return ThemeData(
+      useMaterial3: true,
+      brightness: Brightness.light,
+      scaffoldBackgroundColor: lightBackground,
+      colorScheme: const ColorScheme.light(
+        primary: primary,
+        onPrimary: Colors.white,
+        surface: lightSurface,
+        onSurface: lightText,
+      ),
+      textTheme: const TextTheme(
+        bodyLarge: TextStyle(color: lightText),
+        bodyMedium: TextStyle(color: lightText),
+        bodySmall: TextStyle(color: Color(0xFF3D4A5C)),
+        titleLarge: TextStyle(color: lightText),
+      ),
+      extensions: const [AppStatusColors.light],
+    );
+  }
 
   static ThemeData get dark {
     return ThemeData(

@@ -3,12 +3,12 @@ import 'package:fc_frontend/features/ground_plan/ground_plan_page.dart';
 import 'package:fc_frontend/features/job_execution/job_execution_page.dart';
 import 'package:fc_frontend/features/landing/landing_page.dart';
 import 'package:fc_frontend/features/map_flight/map_flight_page.dart';
+import 'package:fc_frontend/features/profile/profile_page.dart';
+import 'package:fc_frontend/features/settings/battery/battery_settings_page.dart';
+import 'package:fc_frontend/features/settings/calibration/calibration_page.dart';
+import 'package:fc_frontend/features/settings/flight_parameters/flight_parameters_page.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
-
-Widget _blankPage(BuildContext context, GoRouterState state) {
-  return const SizedBox.expand();
-}
 
 class _AppShell extends StatelessWidget {
   const _AppShell({required this.child});
@@ -46,10 +46,22 @@ final GoRouter appRouter = GoRouter(
           path: '/job-execution',
           builder: (context, state) => const JobExecutionPage(),
         ),
-        GoRoute(path: '/profile', builder: _blankPage),
-        GoRoute(path: '/settings/calibration', builder: _blankPage),
-        GoRoute(path: '/settings/battery', builder: _blankPage),
-        GoRoute(path: '/settings/flight-parameters', builder: _blankPage),
+        GoRoute(
+          path: '/profile',
+          builder: (context, state) => const ProfilePage(),
+        ),
+        GoRoute(
+          path: '/settings/calibration',
+          builder: (context, state) => const CalibrationPage(),
+        ),
+        GoRoute(
+          path: '/settings/battery',
+          builder: (context, state) => const BatterySettingsPage(),
+        ),
+        GoRoute(
+          path: '/settings/flight-parameters',
+          builder: (context, state) => const FlightParametersPage(),
+        ),
       ],
     ),
   ],
