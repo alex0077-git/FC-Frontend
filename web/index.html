@@ -41,6 +41,17 @@
     For more details:
     * https://docs.flutter.dev/platform-integration/web/initialization
   -->
+  <script>
+    function lockLandscape() {
+      var orientation = screen.orientation;
+      if (!orientation || !orientation.lock) {
+        return;
+      }
+      orientation.lock('landscape').catch(function () {});
+    }
+    lockLandscape();
+    document.addEventListener('click', lockLandscape);
+  </script>
   <script src="flutter_bootstrap.js" async></script>
 </body>
 </html>
