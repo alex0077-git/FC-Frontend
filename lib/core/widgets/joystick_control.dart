@@ -3,13 +3,15 @@ import 'dart:math';
 import 'package:fc_frontend/core/theme/app_theme.dart';
 import 'package:flutter/material.dart';
 
-class OrientationJoystick extends StatelessWidget {
-  const OrientationJoystick({
+class JoystickControl extends StatelessWidget {
+  const JoystickControl({
     super.key,
+    required this.label,
     required this.degrees,
     required this.onChanged,
   });
 
+  final String label;
   final double degrees;
   final ValueChanged<double> onChanged;
 
@@ -25,11 +27,11 @@ class OrientationJoystick extends StatelessWidget {
 
     return Column(
       children: [
-        const Text('Orientation'),
+        Text(label),
         const SizedBox(height: 8),
         GestureDetector(
-          onPanStart: (details) => _update(context, details.localPosition),
-          onPanUpdate: (details) => _update(context, details.localPosition),
+          onPanStart: (details) => _update(details.localPosition),
+          onPanUpdate: (details) => _update(details.localPosition),
           child: SizedBox(
             width: _size,
             height: _size,
@@ -64,16 +66,16 @@ class OrientationJoystick extends StatelessWidget {
     );
   }
 
-  void _update(BuildContext context, Offset localPosition) {
+  void _update(Offset localPosition) {
     final dx = localPosition.dx - _size / 2;
     final dy = localPosition.dy - _size / 2;
     if (dx == 0 && dy == 0) {
       return;
     }
 
-    final degrees = (atan2(dy, dx) * 180 / pi + 360) % 360;
-    final rounded = degrees.roundToDouble() % 360;
-    if (rounded == this.degrees.roundToDouble()) {
+    final nextDegrees = (atan2(dy, dx) * 180 / pi + 360) % 360;
+    final rounded = nextDegrees.roundToDouble() % 360;
+    if (rounded == degrees.roundToDouble()) {
       return;
     }
     onChanged(rounded);

@@ -1,11 +1,13 @@
 import 'package:fc_frontend/core/theme/app_theme.dart';
+import 'package:fc_frontend/core/widgets/coverage_lines.dart';
+import 'package:fc_frontend/core/widgets/line_spacing_control.dart';
 import 'package:fc_frontend/data/models/flight_log.dart';
 import 'package:fc_frontend/data/models/job_config.dart';
 import 'package:fc_frontend/data/models/mission.dart';
 import 'package:fc_frontend/data/models/waypoint.dart';
 import 'package:fc_frontend/data/repositories/mission_repository.dart';
 import 'package:fc_frontend/data/repositories/telemetry_repository.dart';
-import 'package:fc_frontend/features/ground_plan/orientation_joystick.dart';
+import 'package:fc_frontend/core/widgets/joystick_control.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -81,13 +83,20 @@ class _GroundPlanPageState extends ConsumerState<GroundPlanPage> {
                   ),
                   if (hasCoverage) ...[
                     const SizedBox(height: 16),
-                    OrientationJoystick(
+                    JoystickControl(
+                      label: 'Orientation',
                       degrees: mission.orientationDegrees,
                       onChanged: _setOrientation,
                     ),
                     const SizedBox(height: 12),
-                    _LineSpacingControl(
+                    LineSpacingControl(
                       spacingMeters: mission.spacingMeters,
+                      lowerMeters: MissionRepository.lineSpacingLowerBound(
+                        mission.boundaryPoints,
+                      ),
+                      upperMeters: MissionRepository.lineSpacingUpperBound(
+                        mission.boundaryPoints,
+                      ),
                       onChanged: _setSpacing,
                     ),
                   ],
@@ -186,10 +195,20 @@ class _GroundPlanPageState extends ConsumerState<GroundPlanPage> {
       return;
     }
 
-    ref.read(missionRepositoryProvider.notifier).generateCoverage(
-      spacingMeters: 3,
+    // Confirm already popped the dialog. Let that frame remove the modal
+    // barrier before coverage generation publishes new map data.
+    await WidgetsBinding.instance.endOfFrame;
+    if (!mounted) {
+      return;
+    }
+
+    await ref.read(missionRepositoryProvider.notifier).generateCoverage(
+      spacingMeters: minLineSpacingMeters,
       orientationDegrees: 0,
     );
+    if (!mounted) {
+      return;
+    }
     context.go('/job-execution');
   }
 
@@ -214,21 +233,18 @@ class _GroundPlanPageState extends ConsumerState<GroundPlanPage> {
   }
 
   void _setOrientation(double degrees) {
-    final spacing = ref.read(missionRepositoryProvider).spacingMeters;
-    ref.read(missionRepositoryProvider.notifier).generateCoverage(
-      spacingMeters: spacing,
+    final mission = ref.read(missionRepositoryProvider);
+    ref.read(missionRepositoryProvider.notifier).scheduleCoverage(
+      spacingMeters: mission.spacingMeters,
       orientationDegrees: degrees,
     );
   }
 
   void _setSpacing(double spacingMeters) {
-    if (spacingMeters < 1) {
-      return;
-    }
-    final orientation = ref.read(missionRepositoryProvider).orientationDegrees;
-    ref.read(missionRepositoryProvider.notifier).generateCoverage(
+    final mission = ref.read(missionRepositoryProvider);
+    ref.read(missionRepositoryProvider.notifier).scheduleCoverage(
       spacingMeters: spacingMeters,
-      orientationDegrees: orientation,
+      orientationDegrees: mission.orientationDegrees,
     );
   }
 
@@ -378,6 +394,11 @@ class _PlanMap extends StatelessWidget {
             initialZoom: 16,
             onTap: onTap,
             onMapReady: onMapReady,
+            interactionOptions: InteractionOptions(
+              flags: InteractiveFlag.all & ~InteractiveFlag.rotate,
+              cursorKeyboardRotationOptions:
+                  CursorKeyboardRotationOptions.disabled(),
+            ),
           ),
           children: [
             TileLayer(
@@ -403,14 +424,9 @@ class _PlanMap extends StatelessWidget {
               ),
             if (mission.coverageLines.isNotEmpty)
               PolylineLayer(
-                polylines: [
-                  for (final line in mission.coverageLines)
-                    Polyline(
-                      points: line.endpoints,
-                      color: const Color(0xFF22C55E),
-                      strokeWidth: 3,
-                    ),
-                ],
+                polylines: coveragePolylines(mission.coverageLines),
+                simplificationTolerance: 0,
+                cullingMargin: null,
               ),
             MarkerLayer(
               markers: [
@@ -420,18 +436,6 @@ class _PlanMap extends StatelessWidget {
                     width: 28,
                     height: 28,
                     child: _IndexMarker(label: '${point.order + 1}'),
-                  ),
-                for (final waypoint in mission.waypoints)
-                  Marker(
-                    point: LatLng(waypoint.latitude, waypoint.longitude),
-                    width: 10,
-                    height: 10,
-                    child: const DecoratedBox(
-                      decoration: BoxDecoration(
-                        color: Color(0xFF22C55E),
-                        shape: BoxShape.circle,
-                      ),
-                    ),
                   ),
                 if (pointA != null)
                   Marker(
@@ -520,43 +524,6 @@ class _BoundaryActions extends StatelessWidget {
             onPressed: canCallForJob ? onCallForJob : null,
             child: const Text('Call for Job'),
           ),
-        ),
-      ],
-    );
-  }
-}
-
-class _LineSpacingControl extends StatelessWidget {
-  const _LineSpacingControl({
-    required this.spacingMeters,
-    required this.onChanged,
-  });
-
-  final double spacingMeters;
-  final ValueChanged<double> onChanged;
-
-  @override
-  Widget build(BuildContext context) {
-    final rounded = spacingMeters.round();
-    return Column(
-      children: [
-        const Text('Line Spacing'),
-        const SizedBox(height: 4),
-        Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            IconButton(
-              tooltip: 'Decrease spacing',
-              onPressed: rounded <= 1 ? null : () => onChanged(rounded - 1),
-              icon: const Icon(Icons.remove),
-            ),
-            Text('$rounded m'),
-            IconButton(
-              tooltip: 'Increase spacing',
-              onPressed: () => onChanged(rounded + 1),
-              icon: const Icon(Icons.add),
-            ),
-          ],
         ),
       ],
     );
@@ -682,14 +649,23 @@ class _WaypointList extends StatelessWidget {
             child: Text('No waypoints yet'),
           )
         else
-          for (var index = 0; index < waypoints.length; index++)
-            _WaypointRow(
-              index: index,
-              waypoint: waypoints[index],
-              selected: waypoints[index].id == selectedId,
-              onSelect: () => onSelect(waypoints[index]),
-              onDelete: () => onDelete(waypoints[index].id),
+          SizedBox(
+            height: 220,
+            child: ListView.builder(
+              primary: false,
+              itemCount: waypoints.length,
+              itemBuilder: (context, index) {
+                final waypoint = waypoints[index];
+                return _WaypointRow(
+                  index: index,
+                  waypoint: waypoint,
+                  selected: waypoint.id == selectedId,
+                  onSelect: () => onSelect(waypoint),
+                  onDelete: () => onDelete(waypoint.id),
+                );
+              },
             ),
+          ),
       ],
     );
   }

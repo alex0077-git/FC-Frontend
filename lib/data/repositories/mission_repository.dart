@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math';
 
 import 'package:fc_frontend/data/models/boundary_point.dart';
@@ -8,13 +9,16 @@ import 'package:fc_frontend/data/models/waypoint.dart';
 import 'package:flutter_riverpod/legacy.dart';
 import 'package:latlong2/latlong.dart';
 
+const maxCoverageLines = 2000;
+const minLineSpacingMeters = 1.0;
+
 class MissionState {
   const MissionState({
     this.boundaryPoints = const [],
     this.coverageLines = const [],
     this.waypoints = const [],
     this.savedMissions = const [],
-    this.spacingMeters = 3,
+    this.spacingMeters = 1,
     this.orientationDegrees = 0,
   });
 
@@ -48,6 +52,17 @@ class MissionRepository extends StateNotifier<MissionState> {
   MissionRepository() : super(const MissionState());
 
   int _sequence = 0;
+  Timer? _coverageTimer;
+  double? _pendingSpacing;
+  double? _pendingOrientation;
+  bool _closed = false;
+
+  @override
+  void dispose() {
+    _closed = true;
+    _coverageTimer?.cancel();
+    super.dispose();
+  }
 
   void addBoundaryPoint({
     required double latitude,
@@ -74,37 +89,171 @@ class MissionRepository extends StateNotifier<MissionState> {
     );
   }
 
-  void generateCoverage({
+  Future<void> generateCoverage({
+    required double spacingMeters,
+    required double orientationDegrees,
+  }) async {
+    _coverageTimer?.cancel();
+    _coverageTimer = null;
+    _pendingSpacing = null;
+    _pendingOrientation = null;
+    _publishNow(spacingMeters, orientationDegrees);
+  }
+
+  /// Applies the latest spacing and line angle. The first call paints
+  /// immediately; later calls during a drag replace that pending angle.
+  void scheduleCoverage({
     required double spacingMeters,
     required double orientationDegrees,
   }) {
-    if (spacingMeters <= 0) {
+    _pendingSpacing = spacingMeters;
+    _pendingOrientation = orientationDegrees;
+    if (_coverageTimer != null) {
+      return;
+    }
+
+    _publishPending();
+    _armCoverageCooldown();
+  }
+
+  void _armCoverageCooldown() {
+    _coverageTimer = Timer(const Duration(milliseconds: 50), () {
+      _coverageTimer = null;
+      if (_closed || _pendingSpacing == null || _pendingOrientation == null) {
+        return;
+      }
+      _publishPending();
+      _armCoverageCooldown();
+    });
+  }
+
+  void _publishPending() {
+    final spacing = _pendingSpacing;
+    final orientation = _pendingOrientation;
+    if (spacing == null || orientation == null) {
+      return;
+    }
+    _pendingSpacing = null;
+    _pendingOrientation = null;
+    _publishNow(spacing, orientation);
+  }
+
+  void _publishNow(double spacingMeters, double orientationDegrees) {
+    if (!spacingMeters.isFinite || spacingMeters <= 0) {
       throw ArgumentError.value(
         spacingMeters,
         'spacingMeters',
-        'Spacing must be positive',
+        'Spacing must be a positive finite number',
       );
     }
+    if (state.boundaryPoints.length < 3) {
+      return;
+    }
 
-    final lines = _buildCoverageLines(
-      boundaryPoints: state.boundaryPoints,
+    final lower = lineSpacingLowerBound(state.boundaryPoints);
+    final upper = lineSpacingUpperBound(state.boundaryPoints);
+    final spacing = ((_spacingWithinBoundary(spacingMeters, state.boundaryPoints) * 10)
+                .roundToDouble() /
+            10)
+        .clamp(lower, upper)
+        .toDouble();
+    final request = _requestFromState(
+      spacingMeters: spacing,
+      orientationDegrees: orientationDegrees,
+    );
+    _publishCoverage(request, _coverageGeometry(request));
+  }
+
+  static double lineSpacingUpperBound(List<BoundaryPoint> points) {
+    final span = _boundarySpanMeters(points);
+    if (span <= 0) {
+      return minLineSpacingMeters;
+    }
+    return span;
+  }
+
+  static double lineSpacingLowerBound(List<BoundaryPoint> points) {
+    final upper = lineSpacingUpperBound(points);
+    return min(minLineSpacingMeters, upper);
+  }
+
+  static double _spacingWithinBoundary(
+    double spacingMeters,
+    List<BoundaryPoint> points,
+  ) {
+    return spacingMeters.clamp(
+      lineSpacingLowerBound(points),
+      lineSpacingUpperBound(points),
+    );
+  }
+
+  static double _boundarySpanMeters(List<BoundaryPoint> points) {
+    if (points.length < 2) {
+      return minLineSpacingMeters;
+    }
+    var span = 0.0;
+    for (var i = 0; i < points.length; i++) {
+      for (var j = i + 1; j < points.length; j++) {
+        final meters = const Distance().as(
+          LengthUnit.Meter,
+          LatLng(points[i].latitude, points[i].longitude),
+          LatLng(points[j].latitude, points[j].longitude),
+        );
+        if (meters > span) {
+          span = meters;
+        }
+      }
+    }
+    return span;
+  }
+
+  _CoverageRequest _requestFromState({
+    required double spacingMeters,
+    required double orientationDegrees,
+  }) {
+    final sample = state.waypoints.isEmpty ? null : state.waypoints.first;
+    final points = state.boundaryPoints;
+    return _CoverageRequest(
+      latitudes: [for (final point in points) point.latitude],
+      longitudes: [for (final point in points) point.longitude],
+      orders: [for (final point in points) point.order],
       spacingMeters: spacingMeters,
       orientationDegrees: orientationDegrees,
-      nextId: () => _nextId('coverage'),
-    );
-    final sample = state.waypoints.isEmpty ? null : state.waypoints.first;
-    final waypoints = _waypointsAlongLines(
-      lines,
-      nextId: () => _nextId('waypoint'),
       altitude: sample?.altitude ?? 30,
       speed: sample?.speed ?? 5,
-      action: sample?.action ?? WaypointAction.waypoint,
+      actionIndex: (sample?.action ?? WaypointAction.waypoint).index,
     );
+  }
+
+  void _publishCoverage(_CoverageRequest request, _CoverageGeometry geometry) {
+    final action = WaypointAction.values[request.actionIndex];
+    final lines = <CoverageLine>[
+      for (var index = 0; index < geometry.lines.length; index++)
+        CoverageLine(
+          id: _nextId('coverage'),
+          endpoints: [
+            LatLng(geometry.lines[index][0], geometry.lines[index][1]),
+            LatLng(geometry.lines[index][2], geometry.lines[index][3]),
+          ],
+          lineIndex: index,
+        ),
+    ];
+    final waypoints = <Waypoint>[
+      for (var index = 0; index < geometry.waypointLatitudes.length; index++)
+        Waypoint(
+          id: _nextId('waypoint'),
+          latitude: geometry.waypointLatitudes[index],
+          longitude: geometry.waypointLongitudes[index],
+          altitude: request.altitude,
+          speed: request.speed,
+          action: action,
+        ),
+    ];
     state = state.copyWith(
       coverageLines: List.unmodifiable(lines),
       waypoints: List.unmodifiable(waypoints),
-      spacingMeters: spacingMeters,
-      orientationDegrees: orientationDegrees,
+      spacingMeters: request.spacingMeters,
+      orientationDegrees: request.orientationDegrees,
     );
   }
 
@@ -185,6 +334,41 @@ final missionRepositoryProvider =
       return MissionRepository();
     });
 
+class _CoverageRequest {
+  const _CoverageRequest({
+    required this.latitudes,
+    required this.longitudes,
+    required this.orders,
+    required this.spacingMeters,
+    required this.orientationDegrees,
+    required this.altitude,
+    required this.speed,
+    required this.actionIndex,
+  });
+
+  final List<double> latitudes;
+  final List<double> longitudes;
+  final List<int> orders;
+  final double spacingMeters;
+  final double orientationDegrees;
+  final double altitude;
+  final double speed;
+  final int actionIndex;
+}
+
+class _CoverageGeometry {
+  const _CoverageGeometry({
+    required this.lines,
+    required this.waypointLatitudes,
+    required this.waypointLongitudes,
+  });
+
+  /// Each line is `[startLat, startLng, endLat, endLng]`.
+  final List<List<double>> lines;
+  final List<double> waypointLatitudes;
+  final List<double> waypointLongitudes;
+}
+
 class _LocalPoint {
   const _LocalPoint(this.x, this.y);
 
@@ -192,36 +376,67 @@ class _LocalPoint {
   final double y;
 }
 
-List<CoverageLine> _buildCoverageLines({
-  required List<BoundaryPoint> boundaryPoints,
-  required double spacingMeters,
-  required double orientationDegrees,
-  required String Function() nextId,
-}) {
-  if (boundaryPoints.length < 3) {
-    return const [];
+_CoverageGeometry _coverageGeometry(_CoverageRequest request) {
+  final count = request.latitudes.length;
+  if (count < 3) {
+    return const _CoverageGeometry(
+      lines: [],
+      waypointLatitudes: [],
+      waypointLongitudes: [],
+    );
   }
 
-  final ordered = [...boundaryPoints]
-    ..sort((a, b) => a.order.compareTo(b.order));
-  final originLatitude =
-      ordered.map((point) => point.latitude).reduce((a, b) => a + b) /
-      ordered.length;
-  final originLongitude =
-      ordered.map((point) => point.longitude).reduce((a, b) => a + b) /
-      ordered.length;
-  final alignToEast = -orientationDegrees * pi / 180;
+  final order = List<int>.generate(count, (index) => index)
+    ..sort((a, b) => request.orders[a].compareTo(request.orders[b]));
+  var originLatitude = 0.0;
+  var originLongitude = 0.0;
+  for (final index in order) {
+    originLatitude += request.latitudes[index];
+    originLongitude += request.longitudes[index];
+  }
+  originLatitude /= count;
+  originLongitude /= count;
+
+  // Joystick degrees increase clockwise because screen Y points down.
+  // Local map Y points north, so a positive rotation is anti-clockwise.
+  // Using the joystick angle directly makes coverage lines follow the stick.
+  final alignToEast = request.orientationDegrees * pi / 180;
   final localPolygon = [
-    for (final point in ordered)
-      _rotate(_toLocal(point, originLatitude, originLongitude), alignToEast),
+    for (final index in order)
+      _rotate(
+        _toLocal(
+          request.latitudes[index],
+          request.longitudes[index],
+          originLatitude,
+          originLongitude,
+        ),
+        alignToEast,
+      ),
   ];
 
-  final minY = localPolygon.map((point) => point.y).reduce(min);
-  final maxY = localPolygon.map((point) => point.y).reduce(max);
-  final lines = <CoverageLine>[];
-  var lineIndex = 0;
+  final sweepExtent = _sweepExtent(localPolygon);
+  if (!sweepExtent.isFinite || sweepExtent <= 0) {
+    return const _CoverageGeometry(
+      lines: [],
+      waypointLatitudes: [],
+      waypointLongitudes: [],
+    );
+  }
 
-  for (var y = minY + spacingMeters / 2; y < maxY; y += spacingMeters) {
+  final minY = localPolygon.map((point) => point.y).reduce(min);
+  final lineCount = min(
+    maxCoverageLines,
+    max(2, (sweepExtent / request.spacingMeters).ceil() + 1),
+  );
+  // Spread the requested gap so the first and last lines sit on the
+  // boundary edges. The gap never exceeds the spacing the user set.
+  final step = sweepExtent / (lineCount - 1);
+  final lines = <List<double>>[];
+  final waypointLatitudes = <double>[];
+  final waypointLongitudes = <double>[];
+
+  for (var index = 0; index < lineCount; index++) {
+    final y = minY + index * step;
     final crossings = _horizontalCrossings(localPolygon, y);
     for (var pair = 0; pair + 1 < crossings.length; pair += 2) {
       final start = _fromLocal(
@@ -234,32 +449,50 @@ List<CoverageLine> _buildCoverageLines({
         originLatitude,
         originLongitude,
       );
-      final forward = lineIndex.isEven;
-      final segment = _insetSegment(forward ? start : end, forward ? end : start);
-      lines.add(
-        CoverageLine(
-          id: nextId(),
-          endpoints: [segment.$1, segment.$2],
-          lineIndex: lineIndex,
-        ),
-      );
-      lineIndex += 1;
+      if ((crossings[pair + 1] - crossings[pair]).abs() < 0.05) {
+        continue;
+      }
+      final forward = lines.length.isEven;
+      final from = forward ? start : end;
+      final to = forward ? end : start;
+      lines.add([
+        from.latitude,
+        from.longitude,
+        to.latitude,
+        to.longitude,
+      ]);
+      _appendWaypoints(from, to, waypointLatitudes, waypointLongitudes);
     }
   }
 
-  return lines;
+  return _CoverageGeometry(
+    lines: lines,
+    waypointLatitudes: waypointLatitudes,
+    waypointLongitudes: waypointLongitudes,
+  );
+}
+
+double _sweepExtent(List<_LocalPoint> polygon) {
+  var minY = polygon.first.y;
+  var maxY = polygon.first.y;
+  for (final point in polygon.skip(1)) {
+    minY = min(minY, point.y);
+    maxY = max(maxY, point.y);
+  }
+  return maxY - minY;
 }
 
 _LocalPoint _toLocal(
-  BoundaryPoint point,
+  double latitude,
+  double longitude,
   double originLatitude,
   double originLongitude,
 ) {
   const metersPerDegree = 111320.0;
   final longitudeScale = metersPerDegree * _cosineDegrees(originLatitude);
   return _LocalPoint(
-    (point.longitude - originLongitude) * longitudeScale,
-    (point.latitude - originLatitude) * metersPerDegree,
+    (longitude - originLongitude) * longitudeScale,
+    (latitude - originLatitude) * metersPerDegree,
   );
 }
 
@@ -286,79 +519,69 @@ _LocalPoint _rotate(_LocalPoint point, double radians) {
 }
 
 List<double> _horizontalCrossings(List<_LocalPoint> polygon, double y) {
+  const yEpsilon = 1e-6;
+  const xEpsilon = 1e-4;
   final crossings = <double>[];
+
   for (var index = 0; index < polygon.length; index++) {
     final start = polygon[index];
     final end = polygon[(index + 1) % polygon.length];
-    final crosses =
-        (start.y <= y && end.y > y) || (end.y <= y && start.y > y);
-    if (!crosses) {
+    final y0 = start.y;
+    final y1 = end.y;
+
+    if ((y0 - y).abs() <= yEpsilon && (y1 - y).abs() <= yEpsilon) {
+      crossings.add(start.x);
+      crossings.add(end.x);
       continue;
     }
 
-    final t = (y - start.y) / (end.y - start.y);
+    final dy = y1 - y0;
+    if (dy.abs() <= yEpsilon) {
+      continue;
+    }
+
+    final low = min(y0, y1);
+    final high = max(y0, y1);
+    final throughEdge = y >= low && y < high;
+    final throughTop = (y - high).abs() <= yEpsilon;
+    if (!throughEdge && !throughTop) {
+      continue;
+    }
+
+    final t = ((y - y0) / dy).clamp(0.0, 1.0);
     crossings.add(start.x + t * (end.x - start.x));
   }
-  crossings.sort();
-  return crossings;
-}
 
-(LatLng, LatLng) _insetSegment(LatLng start, LatLng end) {
-  const insetMeters = 1.0;
-  final length = const Distance().as(LengthUnit.Meter, start, end);
-  if (length <= insetMeters * 2) {
-    return (start, end);
+  if (crossings.isEmpty) {
+    return crossings;
   }
-
-  final t = insetMeters / length;
-  return (
-    LatLng(
-      start.latitude + (end.latitude - start.latitude) * t,
-      start.longitude + (end.longitude - start.longitude) * t,
-    ),
-    LatLng(
-      end.latitude + (start.latitude - end.latitude) * t,
-      end.longitude + (start.longitude - end.longitude) * t,
-    ),
-  );
-}
-
-List<Waypoint> _waypointsAlongLines(
-  List<CoverageLine> lines, {
-  required String Function() nextId,
-  required double altitude,
-  required double speed,
-  required WaypointAction action,
-}) {
-  const intervalMeters = 12.0;
-  final distance = const Distance();
-  final waypoints = <Waypoint>[];
-
-  for (final line in lines) {
-    final start = line.endpoints.first;
-    final end = line.endpoints.last;
-    final length = distance.as(LengthUnit.Meter, start, end);
-    final steps = length < 1 ? 0 : max(1, (length / intervalMeters).ceil());
-    for (var step = 0; step <= steps; step++) {
-      final t = steps == 0 ? 0.0 : step / steps;
-      final point = LatLng(
-        start.latitude + (end.latitude - start.latitude) * t,
-        start.longitude + (end.longitude - start.longitude) * t,
-      );
-      waypoints.add(
-        Waypoint(
-          id: nextId(),
-          latitude: point.latitude,
-          longitude: point.longitude,
-          altitude: altitude,
-          speed: speed,
-          action: action,
-        ),
-      );
+  crossings.sort();
+  final unique = <double>[crossings.first];
+  for (final x in crossings.skip(1)) {
+    if (x - unique.last > xEpsilon) {
+      unique.add(x);
     }
   }
+  return unique;
+}
 
-  return waypoints;
+void _appendWaypoints(
+  LatLng start,
+  LatLng end,
+  List<double> latitudes,
+  List<double> longitudes,
+) {
+  const intervalMeters = 12.0;
+  const interiorBudget = 2500;
+  final length = const Distance().as(LengthUnit.Meter, start, end);
+  final steps = length < 1 || latitudes.length >= interiorBudget
+      ? 1
+      : max(1, (length / intervalMeters).ceil());
+  for (var step = 0; step <= steps; step++) {
+    final t = step / steps;
+    latitudes.add(start.latitude + (end.latitude - start.latitude) * t);
+    longitudes.add(start.longitude + (end.longitude - start.longitude) * t);
+  }
 }
 
 double _cosineDegrees(double degrees) {
