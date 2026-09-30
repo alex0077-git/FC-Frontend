@@ -1,5 +1,6 @@
 import 'package:fc_frontend/core/widgets/bottom_nav_bar.dart';
 import 'package:fc_frontend/features/landing/landing_page.dart';
+import 'package:fc_frontend/features/map_flight/map_flight_page.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
@@ -31,7 +32,10 @@ final GoRouter appRouter = GoRouter(
       navigatorKey: shellNavigatorKey,
       builder: (context, state, child) => _AppShell(child: child),
       routes: [
-        GoRoute(path: '/map', builder: _blankPage),
+        GoRoute(
+          path: '/map',
+          builder: (context, state) => const MapFlightPage(),
+        ),
         GoRoute(path: '/ground-plan', builder: _blankPage),
         GoRoute(path: '/job-execution', builder: _blankPage),
         GoRoute(path: '/profile', builder: _blankPage),
