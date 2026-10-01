@@ -128,29 +128,38 @@ class _ConnectButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return TextButton(
-      onPressed: onPressed,
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const Flexible(
-            child: Text('Connect', overflow: TextOverflow.ellipsis),
-          ),
-          const SizedBox(width: 8),
-          Semantics(
-            label: connected ? 'Connected' : 'Disconnected',
-            child: Container(
-              width: 10,
-              height: 10,
-              decoration: BoxDecoration(
-                color: dotColor,
-                shape: BoxShape.circle,
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final showLabel = constraints.maxWidth >= 88;
+        return TextButton(
+          style: TextButton.styleFrom(minimumSize: const Size(48, 48)),
+          onPressed: onPressed,
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (showLabel)
+                const Flexible(
+                  child: Text('Connect', overflow: TextOverflow.ellipsis),
+                )
+              else
+                const Icon(Icons.link),
+              const SizedBox(width: 8),
+              Semantics(
+                label: connected ? 'Connected' : 'Disconnected',
+                child: Container(
+                  width: 10,
+                  height: 10,
+                  decoration: BoxDecoration(
+                    color: dotColor,
+                    shape: BoxShape.circle,
+                  ),
+                ),
               ),
-            ),
+            ],
           ),
-        ],
-      ),
+        );
+      },
     );
   }
 }
@@ -174,6 +183,7 @@ class _NavIconButton extends StatelessWidget {
     final color = selected ? scheme.primary : scheme.onSurface;
     return IconButton(
       tooltip: tooltip,
+      style: IconButton.styleFrom(minimumSize: const Size(48, 48)),
       onPressed: onPressed,
       icon: Icon(icon, color: color),
     );

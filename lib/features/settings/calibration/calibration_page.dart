@@ -109,6 +109,9 @@ class _CalibrationCardState extends State<_CalibrationCard>
             ],
             const SizedBox(height: 12),
             FilledButton(
+              style: FilledButton.styleFrom(
+                minimumSize: const Size.fromHeight(48),
+              ),
               onPressed: _running ? null : _start,
               child: const Text('Start Calibration'),
             ),

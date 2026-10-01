@@ -1,4 +1,5 @@
 import 'package:fc_frontend/core/theme/app_theme.dart';
+import 'package:fc_frontend/core/widgets/responsive.dart';
 import 'package:fc_frontend/data/models/battery_settings.dart';
 import 'package:fc_frontend/data/models/telemetry.dart';
 import 'package:fc_frontend/data/repositories/settings_repository.dart';
@@ -314,41 +315,48 @@ class _TelemetryCards extends StatelessWidget {
     final drone = telemetry == null
         ? null
         : LatLng(telemetry!.latitude, telemetry!.longitude);
+    final cards = [
+      _ReadingCard(
+        label: 'Altitude',
+        value: telemetry == null
+            ? '--'
+            : '${telemetry!.altitude.toStringAsFixed(1)} m',
+      ),
+      _ReadingCard(
+        label: 'Distance to Drone',
+        value: drone == null ? '--' : _formatMeters(_mapCenter, drone),
+      ),
+      _ReadingCard(
+        label: 'Distance to Landing Point',
+        value: drone == null ? '--' : _formatMeters(_landingPoint, drone),
+      ),
+      _ReadingCard(
+        label: 'Speed',
+        value: telemetry == null
+            ? '--'
+            : '${telemetry!.speed.toStringAsFixed(1)} m/s',
+      ),
+    ];
+    final width = Responsive.widthOf(context);
+    if (width < Responsive.desktopMinWidth) {
+      return SizedBox(
+        height: 96,
+        child: ListView.separated(
+          scrollDirection: Axis.horizontal,
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          itemCount: cards.length,
+          separatorBuilder: (context, index) => const SizedBox(width: 8),
+          itemBuilder: (context, index) {
+            return SizedBox(width: 220, child: cards[index]);
+          },
+        ),
+      );
+    }
     return Padding(
       padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
       child: Row(
-        children: [
-          Expanded(
-            child: _ReadingCard(
-              label: 'Altitude',
-              value: telemetry == null
-                  ? '--'
-                  : '${telemetry!.altitude.toStringAsFixed(1)} m',
-            ),
-          ),
-          Expanded(
-            child: _ReadingCard(
-              label: 'Distance to Drone',
-              value: drone == null ? '--' : _formatMeters(_mapCenter, drone),
-            ),
-          ),
-          Expanded(
-            child: _ReadingCard(
-              label: 'Distance to Landing Point',
-              value: drone == null
-                  ? '--'
-                  : _formatMeters(_landingPoint, drone),
-            ),
-          ),
-          Expanded(
-            child: _ReadingCard(
-              label: 'Speed',
-              value: telemetry == null
-                  ? '--'
-                  : '${telemetry!.speed.toStringAsFixed(1)} m/s',
-            ),
-          ),
-        ],
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [for (final card in cards) Expanded(child: card)],
       ),
     );
   }
@@ -368,18 +376,25 @@ class _ReadingCard extends StatelessWidget {
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
         child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          mainAxisSize: MainAxisSize.min,
           children: [
             Text(
               label,
               textAlign: TextAlign.center,
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
-              style: Theme.of(context).textTheme.bodySmall,
+              style: const TextStyle(fontSize: 12, height: 1.2, color: Color(0xFFC5CEDB)),
             ),
             const SizedBox(height: 4),
             Text(
               value,
-              style: Theme.of(context).textTheme.titleMedium?.copyWith(
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                fontSize: 16,
+                height: 1.2,
+                fontWeight: FontWeight.w600,
                 color: Colors.white,
               ),
             ),
@@ -407,19 +422,25 @@ class _CommandRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final buttons = [
+      _CommandButton(label: armed ? 'Disarm' : 'Arm', onPressed: onArmDisarm),
+      _CommandButton(label: 'Takeoff', onPressed: onTakeoff),
+      _CommandButton(label: 'RTL', onPressed: onRtl),
+      _CommandButton(label: 'Land', onPressed: onLand),
+    ];
+    final stacked = Responsive.isMobile(context) &&
+        MediaQuery.sizeOf(context).height >= 500;
     return Padding(
       padding: const EdgeInsets.fromLTRB(12, 4, 12, 8),
-      child: Row(
-        children: [
-          _CommandButton(
-            label: armed ? 'Disarm' : 'Arm',
-            onPressed: onArmDisarm,
-          ),
-          _CommandButton(label: 'Takeoff', onPressed: onTakeoff),
-          _CommandButton(label: 'RTL', onPressed: onRtl),
-          _CommandButton(label: 'Land', onPressed: onLand),
-        ],
-      ),
+      child: stacked
+          ? Column(
+              children: [
+                Row(children: [buttons[0], buttons[1]]),
+                const SizedBox(height: 8),
+                Row(children: [buttons[2], buttons[3]]),
+              ],
+            )
+          : Row(children: buttons),
     );
   }
 }
@@ -436,6 +457,7 @@ class _CommandButton extends StatelessWidget {
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 4),
         child: FilledButton(
+          style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
           onPressed: onPressed,
           child: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis),
         ),

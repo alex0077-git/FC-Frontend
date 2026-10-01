@@ -27,14 +27,16 @@ class LineSpacingControl extends StatelessWidget {
           children: [
             IconButton(
               tooltip: 'Decrease spacing',
+              style: IconButton.styleFrom(minimumSize: const Size(48, 48)),
               onPressed: atMin
                   ? null
                   : () => onChanged(_step(spacingMeters - 1)),
               icon: const Text('-', style: TextStyle(fontSize: 22)),
             ),
-            Text(_label(spacingMeters)),
+            Text(_label(spacingMeters), style: Theme.of(context).textTheme.titleMedium),
             IconButton(
               tooltip: 'Increase spacing',
+              style: IconButton.styleFrom(minimumSize: const Size(48, 48)),
               onPressed: atMax
                   ? null
                   : () => onChanged(_step(spacingMeters + 1)),

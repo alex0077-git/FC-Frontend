@@ -8,6 +8,7 @@ class HomeButton extends StatelessWidget {
   Widget build(BuildContext context) {
     return IconButton(
       tooltip: 'Home',
+      style: IconButton.styleFrom(minimumSize: const Size(48, 48)),
       onPressed: () => context.go('/'),
       icon: const Icon(Icons.home_outlined),
     );

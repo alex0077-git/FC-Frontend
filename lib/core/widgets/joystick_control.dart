@@ -9,32 +9,36 @@ class JoystickControl extends StatelessWidget {
     required this.label,
     required this.degrees,
     required this.onChanged,
+    this.size = 120,
   });
 
   final String label;
   final double degrees;
   final ValueChanged<double> onChanged;
+  final double size;
 
-  static const double _size = 120;
-  static const double _handleSize = 28;
+  static const double _handleSize = 36;
 
   @override
   Widget build(BuildContext context) {
     final radians = degrees * pi / 180;
-    final travel = (_size - _handleSize) / 2;
-    final handleLeft = _size / 2 + cos(radians) * travel - _handleSize / 2;
-    final handleTop = _size / 2 + sin(radians) * travel - _handleSize / 2;
+    final travel = (size - _handleSize) / 2;
+    final handleLeft = size / 2 + cos(radians) * travel - _handleSize / 2;
+    final handleTop = size / 2 + sin(radians) * travel - _handleSize / 2;
 
     return Column(
+      mainAxisSize: MainAxisSize.min,
       children: [
-        Text(label),
-        const SizedBox(height: 8),
+        if (label.isNotEmpty) ...[
+          Text(label),
+          const SizedBox(height: 8),
+        ],
         GestureDetector(
           onPanStart: (details) => _update(details.localPosition),
           onPanUpdate: (details) => _update(details.localPosition),
           child: SizedBox(
-            width: _size,
-            height: _size,
+            width: size,
+            height: size,
             child: DecoratedBox(
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
@@ -67,8 +71,8 @@ class JoystickControl extends StatelessWidget {
   }
 
   void _update(Offset localPosition) {
-    final dx = localPosition.dx - _size / 2;
-    final dy = localPosition.dy - _size / 2;
+    final dx = localPosition.dx - size / 2;
+    final dy = localPosition.dy - size / 2;
     if (dx == 0 && dy == 0) {
       return;
     }

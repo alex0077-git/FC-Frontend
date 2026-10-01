@@ -27,6 +27,10 @@ class SettingsNumberField extends StatelessWidget {
           labelText: label,
           border: const OutlineInputBorder(),
           errorText: errorText,
+          contentPadding: const EdgeInsets.symmetric(
+            horizontal: 12,
+            vertical: 16,
+          ),
         ),
         onChanged: onChanged,
       ),

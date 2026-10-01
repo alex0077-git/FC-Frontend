@@ -42,7 +42,7 @@ class _RotateToLandscape extends StatelessWidget {
               ),
               const SizedBox(height: 8),
               Text(
-                'The phone uses the same layout as a laptop.',
+                'The map stays large, and the controls sit along the bottom.',
                 textAlign: TextAlign.center,
                 style: Theme.of(context).textTheme.bodyMedium,
               ),

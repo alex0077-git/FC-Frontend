@@ -1,4 +1,5 @@
 import 'package:fc_frontend/core/theme/app_theme.dart';
+import 'package:fc_frontend/core/widgets/responsive.dart';
 import 'package:fc_frontend/data/repositories/telemetry_repository.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -36,20 +37,47 @@ class _ConnectPanelState extends ConsumerState<ConnectPanel> {
         children: [
           Text('Connect', style: Theme.of(context).textTheme.titleLarge),
           const SizedBox(height: 16),
-          Row(
-            children: [
-              for (var index = 0; index < _options.length; index++) ...[
-                if (index > 0) const SizedBox(width: 12),
-                Expanded(
-                  child: _TransportCard(
-                    label: _options[index].label,
-                    icon: _options[index].icon,
-                    selected: _selected == _options[index].label,
-                    onTap: () => _toggle(_options[index].label),
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final cards = [
+                for (final option in _options)
+                  _TransportCard(
+                    label: option.label,
+                    icon: option.icon,
+                    selected: _selected == option.label,
+                    onTap: () => _toggle(option.label),
                   ),
-                ),
-              ],
-            ],
+              ];
+              if (constraints.maxWidth < Responsive.mobileMaxWidth) {
+                return Column(
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(child: cards[0]),
+                        const SizedBox(width: 12),
+                        Expanded(child: cards[1]),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        Expanded(child: cards[2]),
+                        const SizedBox(width: 12),
+                        Expanded(child: cards[3]),
+                      ],
+                    ),
+                  ],
+                );
+              }
+              return Row(
+                children: [
+                  for (var index = 0; index < cards.length; index++) ...[
+                    if (index > 0) const SizedBox(width: 12),
+                    Expanded(child: cards[index]),
+                  ],
+                ],
+              );
+            },
           ),
         ],
       ),

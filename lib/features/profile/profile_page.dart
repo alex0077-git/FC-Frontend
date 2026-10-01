@@ -1,4 +1,5 @@
 import 'package:fc_frontend/core/theme/theme_mode_provider.dart';
+import 'package:fc_frontend/core/widgets/responsive.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -27,8 +28,9 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
     final themeMode = ref.watch(themeModeProvider);
     final scheme = Theme.of(context).colorScheme;
 
+    final phone = Responsive.isPhone(context);
     return ListView(
-      padding: const EdgeInsets.fromLTRB(24, 32, 24, 24),
+      padding: EdgeInsets.fromLTRB(phone ? 16 : 24, phone ? 16 : 32, phone ? 16 : 24, 24),
       children: [
         Center(
           child: CircleAvatar(
@@ -137,8 +139,16 @@ class _ThemeChoice extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (selected) {
-      return FilledButton(onPressed: onPressed, child: Text(label));
+      return FilledButton(
+        style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
+        onPressed: onPressed,
+        child: Text(label),
+      );
     }
-    return OutlinedButton(onPressed: onPressed, child: Text(label));
+    return OutlinedButton(
+      style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(48)),
+      onPressed: onPressed,
+      child: Text(label),
+    );
   }
 }
