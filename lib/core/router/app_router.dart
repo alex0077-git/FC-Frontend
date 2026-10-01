@@ -1,4 +1,5 @@
 import 'package:fc_frontend/core/widgets/bottom_nav_bar.dart';
+import 'package:fc_frontend/core/widgets/flight_status_bar.dart';
 import 'package:fc_frontend/features/ground_plan/ground_plan_page.dart';
 import 'package:fc_frontend/features/job_execution/job_execution_page.dart';
 import 'package:fc_frontend/features/landing/landing_page.dart';
@@ -18,7 +19,12 @@ class _AppShell extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: child,
+      body: Column(
+        children: [
+          const FlightStatusBar(),
+          Expanded(child: child),
+        ],
+      ),
       bottomNavigationBar: const BottomNavBar(),
     );
   }

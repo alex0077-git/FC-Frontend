@@ -54,44 +54,26 @@ class _GroundPlanPageState extends ConsumerState<GroundPlanPage> {
     final selected = _waypointById(mission.waypoints, _selectedWaypointId);
     final hasCoverage = mission.coverageLines.isNotEmpty;
 
-    final compact = Responsive.useCompactMapLayout(context);
-
     return Scaffold(
-      body: compact
-          ? _CompactPlan(
-              map: _planMap(boundary),
-              hasCoverage: hasCoverage,
-              mission: mission,
-              onCallForJob: _callForJob,
-              canCallForJob: mission.boundaryPoints.length >= 3,
-              onOrientation: _setOrientation,
-              onSpacing: _setSpacing,
-              onOpenDetails: () => _openPlanDetails(
-                mission: mission,
-                selected: selected,
-                hasCoverage: hasCoverage,
-              ),
-            )
-          : Row(
-              children: [
-                Expanded(flex: 3, child: _planMap(boundary)),
-                SizedBox(
-                  width: Responsive.sidePanelWidth(context, desktopWidth: 340),
-                  child: Material(
-                    color: AppTheme.surface,
-                    child: ListView(
-                      padding: const EdgeInsets.fromLTRB(12, 12, 12, 16),
-                      children: _planPanelChildren(
-                        mission: mission,
-                        selected: selected,
-                        hasCoverage: hasCoverage,
-                        includeControls: true,
-                      ),
-                    ),
-                  ),
+      body: Row(
+        children: [
+          Expanded(flex: 3, child: _planMap(boundary)),
+          SizedBox(
+            width: Responsive.sidePanelWidth(context, desktopWidth: 340),
+            child: Material(
+              color: AppTheme.surface,
+              child: ListView(
+                padding: const EdgeInsets.fromLTRB(12, 12, 12, 16),
+                children: _planPanelChildren(
+                  mission: mission,
+                  selected: selected,
+                  hasCoverage: hasCoverage,
                 ),
-              ],
+              ),
             ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -108,39 +90,10 @@ class _GroundPlanPageState extends ConsumerState<GroundPlanPage> {
     );
   }
 
-  void _openPlanDetails({
-    required MissionState mission,
-    required Waypoint? selected,
-    required bool hasCoverage,
-  }) {
-    showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: AppTheme.surface,
-      showDragHandle: true,
-      constraints: const BoxConstraints(maxWidth: double.infinity),
-      builder: (context) {
-        return FractionallySizedBox(
-          heightFactor: 0.78,
-          child: ListView(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
-            children: _planPanelChildren(
-              mission: mission,
-              selected: selected,
-              hasCoverage: hasCoverage,
-              includeControls: false,
-            ),
-          ),
-        );
-      },
-    );
-  }
-
   List<Widget> _planPanelChildren({
     required MissionState mission,
     required Waypoint? selected,
     required bool hasCoverage,
-    required bool includeControls,
   }) {
     return [
       _BoundaryActions(
@@ -148,7 +101,7 @@ class _GroundPlanPageState extends ConsumerState<GroundPlanPage> {
         onReset: _resetBoundary,
         onCallForJob: _callForJob,
       ),
-      if (includeControls && hasCoverage) ...[
+      if (hasCoverage) ...[
         const SizedBox(height: 16),
         JoystickControl(
           label: 'Orientation',
@@ -409,98 +362,6 @@ Waypoint? _waypointById(List<Waypoint> waypoints, String? id) {
     }
   }
   return null;
-}
-
-class _CompactPlan extends StatelessWidget {
-  const _CompactPlan({
-    required this.map,
-    required this.hasCoverage,
-    required this.mission,
-    required this.canCallForJob,
-    required this.onCallForJob,
-    required this.onOrientation,
-    required this.onSpacing,
-    required this.onOpenDetails,
-  });
-
-  final Widget map;
-  final bool hasCoverage;
-  final MissionState mission;
-  final bool canCallForJob;
-  final VoidCallback onCallForJob;
-  final ValueChanged<double> onOrientation;
-  final ValueChanged<double> onSpacing;
-  final VoidCallback onOpenDetails;
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      children: [
-        Expanded(child: map),
-        Material(
-          color: AppTheme.surface,
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(8, 8, 8, 8),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.center,
-              children: [
-                if (hasCoverage)
-                  JoystickControl(
-                    label: '',
-                    degrees: mission.orientationDegrees,
-                    size: 88,
-                    onChanged: onOrientation,
-                  ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      if (hasCoverage)
-                        LineSpacingControl(
-                          spacingMeters: mission.spacingMeters,
-                          lowerMeters: MissionRepository.lineSpacingLowerBound(
-                            mission.boundaryPoints,
-                          ),
-                          upperMeters: MissionRepository.lineSpacingUpperBound(
-                            mission.boundaryPoints,
-                          ),
-                          onChanged: onSpacing,
-                        ),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: FilledButton(
-                              style: FilledButton.styleFrom(
-                                minimumSize: const Size.fromHeight(48),
-                              ),
-                              onPressed: canCallForJob ? onCallForJob : null,
-                              child: const Text('Call for Job'),
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: OutlinedButton(
-                              style: OutlinedButton.styleFrom(
-                                minimumSize: const Size.fromHeight(48),
-                              ),
-                              onPressed: onOpenDetails,
-                              child: const Text('Plan details'),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ],
-    );
-  }
 }
 
 class _PlanMap extends StatelessWidget {

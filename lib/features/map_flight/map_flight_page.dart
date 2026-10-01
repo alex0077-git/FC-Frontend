@@ -28,21 +28,51 @@ class _MapFlightPageState extends ConsumerState<MapFlightPage> {
     final batterySettings = ref.watch(batterySettingsProvider);
     final armed = _commandedArmed ?? telemetry?.armed ?? false;
 
+    final sideBySide = Responsive.useCompactMapLayout(context);
+    final commands = _CommandRow(
+      armed: armed,
+      stacked: sideBySide,
+      onArmDisarm: () => _onArmDisarm(armed),
+      onTakeoff: _showCommandSent,
+      onRtl: _onRtl,
+      onLand: _showCommandSent,
+    );
+    final map = _FlightMap(telemetry: telemetry);
+
     return Scaffold(
       body: Column(
         children: [
-          _StatusStrip(telemetry: telemetry, batterySettings: batterySettings),
           if (telemetry != null)
             _BatteryBanner(telemetry: telemetry, settings: batterySettings),
-          Expanded(child: _FlightMap(telemetry: telemetry)),
-          _TelemetryCards(telemetry: telemetry),
-          _CommandRow(
-            armed: armed,
-            onArmDisarm: () => _onArmDisarm(armed),
-            onTakeoff: _showCommandSent,
-            onRtl: _onRtl,
-            onLand: _showCommandSent,
-          ),
+          if (sideBySide)
+            Expanded(
+              child: Row(
+                children: [
+                  Expanded(flex: 3, child: map),
+                  SizedBox(
+                    width: Responsive.sidePanelWidth(context, desktopWidth: 260),
+                    child: Material(
+                      color: AppTheme.surface,
+                      child: ListView(
+                        padding: const EdgeInsets.fromLTRB(8, 8, 8, 12),
+                        children: [
+                          _TelemetryCards(
+                            telemetry: telemetry,
+                            stacked: true,
+                          ),
+                          commands,
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            )
+          else ...[
+            Expanded(child: map),
+            _TelemetryCards(telemetry: telemetry),
+            commands,
+          ],
         ],
       ),
     );
@@ -108,81 +138,6 @@ class _MapFlightPageState extends ConsumerState<MapFlightPage> {
   }
 }
 
-class _StatusStrip extends StatelessWidget {
-  const _StatusStrip({required this.telemetry, required this.batterySettings});
-
-  final Telemetry? telemetry;
-  final BatterySettings batterySettings;
-
-  @override
-  Widget build(BuildContext context) {
-    final statusColors = Theme.of(context).extension<AppStatusColors>()!;
-    final battery = telemetry?.battery;
-    return Material(
-      color: AppTheme.surface,
-      child: SizedBox(
-        height: 40,
-        child: Row(
-          children: [
-            Expanded(
-              child: _StatusItem(
-                icon: Icons.battery_std,
-                label: battery == null
-                    ? 'Battery --'
-                    : 'Battery ${battery.toStringAsFixed(1)}%',
-                color: _batteryColor(battery, batterySettings, statusColors),
-              ),
-            ),
-            Expanded(
-              child: _StatusItem(
-                icon: Icons.satellite_alt,
-                label: telemetry == null
-                    ? 'GPS --'
-                    : 'GPS ${telemetry!.gpsCount}',
-              ),
-            ),
-            Expanded(
-              child: _StatusItem(
-                icon: Icons.flight,
-                label: telemetry == null ? 'Mode --' : telemetry!.mode,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _StatusItem extends StatelessWidget {
-  const _StatusItem({required this.icon, required this.label, this.color});
-
-  final IconData icon;
-  final String label;
-  final Color? color;
-
-  @override
-  Widget build(BuildContext context) {
-    final itemColor = color ?? AppTheme.text;
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: [
-        Icon(icon, size: 16, color: itemColor),
-        const SizedBox(width: 6),
-        Flexible(
-          child: Text(
-            label,
-            overflow: TextOverflow.ellipsis,
-            style: Theme.of(context).textTheme.bodySmall?.copyWith(
-              color: itemColor,
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-}
-
 class _BatteryBanner extends StatelessWidget {
   const _BatteryBanner({required this.telemetry, required this.settings});
 
@@ -236,21 +191,6 @@ _BatteryAlertLevel? _batteryAlertLevel(double battery, BatterySettings settings)
   return null;
 }
 
-Color _batteryColor(
-  double? battery,
-  BatterySettings settings,
-  AppStatusColors statusColors,
-) {
-  final level = battery == null
-      ? null
-      : _batteryAlertLevel(battery, settings);
-  return switch (level) {
-    _BatteryAlertLevel.critical => statusColors.statusCritical,
-    _BatteryAlertLevel.warning => statusColors.statusWarning,
-    null => statusColors.statusGood,
-  };
-}
-
 class _FlightMap extends StatelessWidget {
   const _FlightMap({required this.telemetry});
 
@@ -276,8 +216,20 @@ class _FlightMap extends StatelessWidget {
               ),
             ],
           ),
-        const SimpleAttributionWidget(
-          source: Text('OpenStreetMap contributors'),
+        const Align(
+          alignment: Alignment.bottomRight,
+          child: ColoredBox(
+            color: Color(0xCC121A2B),
+            child: Padding(
+              padding: EdgeInsets.all(4),
+              child: Text(
+                '© OpenStreetMap contributors',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(fontSize: 11, color: Colors.white),
+              ),
+            ),
+          ),
         ),
       ],
     );
@@ -306,36 +258,76 @@ class _DroneMarker extends StatelessWidget {
 }
 
 class _TelemetryCards extends StatelessWidget {
-  const _TelemetryCards({required this.telemetry});
+  const _TelemetryCards({required this.telemetry, this.stacked = false});
 
   final Telemetry? telemetry;
+  final bool stacked;
 
   @override
   Widget build(BuildContext context) {
     final drone = telemetry == null
         ? null
         : LatLng(telemetry!.latitude, telemetry!.longitude);
-    final cards = [
-      _ReadingCard(
+    final readings = [
+      (
         label: 'Altitude',
         value: telemetry == null
             ? '--'
             : '${telemetry!.altitude.toStringAsFixed(1)} m',
       ),
-      _ReadingCard(
+      (
         label: 'Distance to Drone',
         value: drone == null ? '--' : _formatMeters(_mapCenter, drone),
       ),
-      _ReadingCard(
+      (
         label: 'Distance to Landing Point',
         value: drone == null ? '--' : _formatMeters(_landingPoint, drone),
       ),
-      _ReadingCard(
+      (
         label: 'Speed',
         value: telemetry == null
             ? '--'
             : '${telemetry!.speed.toStringAsFixed(1)} m/s',
       ),
+    ];
+    if (stacked) {
+      return Column(
+        children: [
+          for (final reading in readings)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 4),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      reading.label,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        height: 1.2,
+                        color: Color(0xFFC5CEDB),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    reading.value,
+                    style: const TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.white,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+        ],
+      );
+    }
+    final cards = [
+      for (final reading in readings)
+        _ReadingCard(label: reading.label, value: reading.value),
     ];
     final width = Responsive.widthOf(context);
     if (width < Responsive.desktopMinWidth) {
@@ -408,6 +400,7 @@ class _ReadingCard extends StatelessWidget {
 class _CommandRow extends StatelessWidget {
   const _CommandRow({
     required this.armed,
+    required this.stacked,
     required this.onArmDisarm,
     required this.onTakeoff,
     required this.onRtl,
@@ -415,6 +408,7 @@ class _CommandRow extends StatelessWidget {
   });
 
   final bool armed;
+  final bool stacked;
   final VoidCallback onArmDisarm;
   final VoidCallback onTakeoff;
   final VoidCallback onRtl;
@@ -428,8 +422,6 @@ class _CommandRow extends StatelessWidget {
       _CommandButton(label: 'RTL', onPressed: onRtl),
       _CommandButton(label: 'Land', onPressed: onLand),
     ];
-    final stacked = Responsive.isMobile(context) &&
-        MediaQuery.sizeOf(context).height >= 500;
     return Padding(
       padding: const EdgeInsets.fromLTRB(12, 4, 12, 8),
       child: stacked

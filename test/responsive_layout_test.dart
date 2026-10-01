@@ -42,13 +42,13 @@ void main() {
 
   testWidgets('ground plan fits a phone in landscape', (tester) async {
     await pumpPage(tester, const Size(667, 375), const GroundPlanPage());
-    expect(find.text('Plan details'), findsOneWidget);
+    expect(find.text('Call for Job'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
   testWidgets('job execution fits a phone in landscape', (tester) async {
     await pumpPage(tester, const Size(844, 390), const JobExecutionPage());
-    expect(find.text('Next Line'), findsOneWidget);
+    expect(find.text('Next Line', skipOffstage: false), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 }

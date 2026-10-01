@@ -1,21 +1,15 @@
-import 'package:fc_frontend/core/theme/app_theme.dart';
-import 'package:fc_frontend/core/widgets/connect_panel.dart';
 import 'package:fc_frontend/core/widgets/home_button.dart';
-import 'package:fc_frontend/data/repositories/telemetry_repository.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 final GlobalKey<NavigatorState> shellNavigatorKey = GlobalKey<NavigatorState>();
 
-class BottomNavBar extends ConsumerWidget {
+class BottomNavBar extends StatelessWidget {
   const BottomNavBar({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  Widget build(BuildContext context) {
     final location = GoRouterState.of(context).uri.path;
-    final connected = ref.watch(telemetryConnectionProvider);
-    final statusColors = Theme.of(context).extension<AppStatusColors>()!;
 
     final colors = Theme.of(context).colorScheme;
     return Material(
@@ -27,15 +21,6 @@ class BottomNavBar extends ConsumerWidget {
           child: Row(
             children: [
               const Expanded(child: HomeButton()),
-              Expanded(
-                child: _ConnectButton(
-                  connected: connected,
-                  dotColor: connected
-                      ? statusColors.statusGood
-                      : const Color(0xFF6B7280),
-                  onPressed: () => _openConnectPanel(),
-                ),
-              ),
               Expanded(
                 child: _NavIconButton(
                   tooltip: 'Map/Flight',
@@ -75,22 +60,6 @@ class BottomNavBar extends ConsumerWidget {
     );
   }
 
-  void _openConnectPanel() {
-    final navigatorContext = shellNavigatorKey.currentContext;
-    if (navigatorContext == null) {
-      return;
-    }
-
-    showModalBottomSheet<void>(
-      context: navigatorContext,
-      useRootNavigator: false,
-      isScrollControlled: true,
-      backgroundColor: Theme.of(navigatorContext).colorScheme.surface,
-      showDragHandle: true,
-      builder: (context) => const ConnectPanel(),
-    );
-  }
-
   void _openSettingsMenu(BuildContext context) {
     final navigatorContext = shellNavigatorKey.currentContext;
     if (navigatorContext == null) {
@@ -109,55 +78,6 @@ class BottomNavBar extends ConsumerWidget {
             Navigator.of(sheetContext).pop();
             context.go(path);
           },
-        );
-      },
-    );
-  }
-}
-
-class _ConnectButton extends StatelessWidget {
-  const _ConnectButton({
-    required this.connected,
-    required this.dotColor,
-    required this.onPressed,
-  });
-
-  final bool connected;
-  final Color dotColor;
-  final VoidCallback onPressed;
-
-  @override
-  Widget build(BuildContext context) {
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final showLabel = constraints.maxWidth >= 88;
-        return TextButton(
-          style: TextButton.styleFrom(minimumSize: const Size(48, 48)),
-          onPressed: onPressed,
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (showLabel)
-                const Flexible(
-                  child: Text('Connect', overflow: TextOverflow.ellipsis),
-                )
-              else
-                const Icon(Icons.link),
-              const SizedBox(width: 8),
-              Semantics(
-                label: connected ? 'Connected' : 'Disconnected',
-                child: Container(
-                  width: 10,
-                  height: 10,
-                  decoration: BoxDecoration(
-                    color: dotColor,
-                    shape: BoxShape.circle,
-                  ),
-                ),
-              ),
-            ],
-          ),
         );
       },
     );
