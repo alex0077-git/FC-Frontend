@@ -142,8 +142,9 @@ void main() {
     repository.addBoundaryPoint(latitude: 12.974, longitude: 77.595);
     await tester.pump();
 
-    await tester.ensureVisible(find.text('Obstacle Mapping'));
-    await tester.tap(find.text('Obstacle Mapping'));
+    await tester.tap(find.text('Obstacles'));
+    await tester.pump();
+    await tester.tap(find.text('Add Obstacle'));
     await tester.pump();
     expect(find.text('Circle'), findsOneWidget);
     expect(find.text('Square'), findsOneWidget);

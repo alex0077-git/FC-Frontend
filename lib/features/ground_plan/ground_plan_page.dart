@@ -36,6 +36,8 @@ enum _MapPlacement { boundary, pointA, pointB, split }
 
 enum _SplitSlot { first, end }
 
+enum _SidebarSection { boundary, split, obstacles, waypoints, history }
+
 class GroundPlanPage extends ConsumerStatefulWidget {
   const GroundPlanPage({super.key});
 
@@ -59,6 +61,7 @@ class _GroundPlanPageState extends ConsumerState<GroundPlanPage> {
   bool _mappingObstacles = false;
   ObstacleTool? _obstacleTool;
   String? _selectedObstacleId;
+  _SidebarSection? _openSection = _SidebarSection.boundary;
 
   @override
   void dispose() {
@@ -112,15 +115,57 @@ class _GroundPlanPageState extends ConsumerState<GroundPlanPage> {
                 width: Responsive.sidePanelWidth(context, desktopWidth: 340),
                 child: Material(
                   color: AppTheme.surface,
-                  child: ListView(
-                    padding: const EdgeInsets.fromLTRB(12, 12, 12, 16),
-                    children: _planPanelChildren(
-                      mission: mission,
-                      selected: selected,
-                      hasCoverage: hasCoverage,
-                      canUndo: canUndo,
-                      canRedo: canRedo,
-                    ),
+                  child: Column(
+                    children: [
+                      Expanded(
+                        child: ListView(
+                          padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+                          children: _planPanelChildren(
+                            mission: mission,
+                            selected: selected,
+                            canUndo: canUndo,
+                            canRedo: canRedo,
+                          ),
+                        ),
+                      ),
+                      if (hasCoverage)
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+                          child: Column(
+                            children: [
+                              JoystickControl(
+                                label: 'Orientation',
+                                degrees: mission.orientationDegrees,
+                                onChanged: _setOrientation,
+                              ),
+                              const SizedBox(height: 8),
+                              LineSpacingControl(
+                                spacingMeters: mission.spacingMeters,
+                                lowerMeters: MissionRepository.lineSpacingLowerBound(
+                                  mission.boundaryPoints,
+                                ),
+                                upperMeters: MissionRepository.lineSpacingUpperBound(
+                                  mission.boundaryPoints,
+                                ),
+                                onChanged: _setSpacing,
+                              ),
+                            ],
+                          ),
+                        ),
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+                        child: FilledButton(
+                          style: FilledButton.styleFrom(
+                            minimumSize: const Size.fromHeight(48),
+                          ),
+                          onPressed: !mission.boundaryEditingLocked &&
+                                  mission.boundaryPoints.length >= 3
+                              ? _callForJob
+                              : null,
+                          child: const Text('Call for Job'),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               ),
@@ -158,111 +203,151 @@ class _GroundPlanPageState extends ConsumerState<GroundPlanPage> {
   List<Widget> _planPanelChildren({
     required MissionState mission,
     required Waypoint? selected,
-    required bool hasCoverage,
     required bool canUndo,
     required bool canRedo,
   }) {
     return [
-      _BoundaryActions(
-        canUndo: canUndo,
-        canRedo: canRedo,
-        canCallForJob:
-            !mission.boundaryEditingLocked && mission.boundaryPoints.length >= 3,
-        canSplit: mission.boundaryPoints.length >= 3,
-        splitting: _placement == _MapPlacement.split,
-        splitSlot: _splitSlot,
-        firstPlaced: _splitFirst != null,
-        endPlaced: _splitEnd != null,
-        canUndoSplit: mission.splits.isNotEmpty,
-        activeSplit: mission.activeSplit,
-        sectionCount: _sectionCount(mission),
-        onUndo: _undoBoundary,
-        onRedo: _redoBoundary,
-        onReset: _resetBoundary,
-        onCallForJob: _callForJob,
-        onSplit: _toggleSplit,
-        onUndoSplit: _undoSplit,
-        onChooseFirst: () => _chooseSplitSlot(_SplitSlot.first),
-        onChooseEnd: () => _chooseSplitSlot(_SplitSlot.end),
-        onSelectSplitA: () => _selectSplit(0),
-        onSelectSplitB: () => _selectSplit(1),
-        mappingObstacles: _mappingObstacles,
-        onObstacleMapping: _toggleObstacleMapping,
-      ),
-      if (_mappingObstacles) ...[
-        const SizedBox(height: 8),
-        ObstacleMappingSection(
-          tool: _obstacleTool,
-          obstacles: mission.obstacles,
-          selectedId: _selectedObstacleId,
-          onCircle: () => _chooseObstacleTool(ObstacleTool.circle),
-          onSquare: () => _chooseObstacleTool(ObstacleTool.square),
-          onSelect: (id) => setState(() => _selectedObstacleId = id),
-          onRadius: _setObstacleRadius,
-          onSide: _setObstacleSide,
-          onSave: _saveSelectedObstacle,
-          onRemove: _removeSelectedObstacle,
+      _SidebarSectionTile(
+        icon: Icons.polyline_outlined,
+        label: 'Boundary',
+        expanded: _openSection == _SidebarSection.boundary,
+        onTap: () => _toggleSidebar(_SidebarSection.boundary),
+        child: _BoundaryActions(
+          canUndo: canUndo,
+          canRedo: canRedo,
+          onUndo: _undoBoundary,
+          onRedo: _redoBoundary,
+          onReset: _resetBoundary,
         ),
-      ],
-      if (hasCoverage) ...[
-        const SizedBox(height: 16),
-        JoystickControl(
-          label: 'Orientation',
-          degrees: mission.orientationDegrees,
-          onChanged: _setOrientation,
+      ),
+      _SidebarSectionTile(
+        icon: Icons.call_split,
+        label: 'Split (A/B)',
+        expanded: _openSection == _SidebarSection.split,
+        onTap: () => _toggleSidebar(_SidebarSection.split),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            _FieldSplitControls(
+              canSplit: mission.boundaryPoints.length >= 3,
+              splitting: _placement == _MapPlacement.split,
+              splitSlot: _splitSlot,
+              firstPlaced: _splitFirst != null,
+              endPlaced: _splitEnd != null,
+              canUndoSplit: mission.splits.isNotEmpty,
+              activeSplit: mission.activeSplit,
+              sectionCount: _sectionCount(mission),
+              onSplit: _toggleSplit,
+              onUndoSplit: _undoSplit,
+              onChooseFirst: () => _chooseSplitSlot(_SplitSlot.first),
+              onChooseEnd: () => _chooseSplitSlot(_SplitSlot.end),
+              onSelectSplitA: () => _selectSplit(0),
+              onSelectSplitB: () => _selectSplit(1),
+            ),
+            const SizedBox(height: 12),
+            _PointPairSection(
+              pointA: _pointA,
+              pointB: _pointB,
+              placement: _placement,
+              operationMode: _operationMode,
+              onSetA: () => _togglePlacement(_MapPlacement.pointA),
+              onSetB: () => _togglePlacement(_MapPlacement.pointB),
+              onModeChanged: (mode) => setState(() => _operationMode = mode),
+            ),
+          ],
         ),
-        const SizedBox(height: 12),
-        LineSpacingControl(
-          spacingMeters: mission.spacingMeters,
-          lowerMeters: MissionRepository.lineSpacingLowerBound(
-            mission.boundaryPoints,
-          ),
-          upperMeters: MissionRepository.lineSpacingUpperBound(
-            mission.boundaryPoints,
-          ),
-          onChanged: _setSpacing,
+      ),
+      _SidebarSectionTile(
+        icon: Icons.block,
+        label: 'Obstacles',
+        expanded: _openSection == _SidebarSection.obstacles,
+        onTap: () => _toggleSidebar(_SidebarSection.obstacles),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            OutlinedButton(
+              style: OutlinedButton.styleFrom(
+                minimumSize: const Size.fromHeight(40),
+                backgroundColor: _mappingObstacles
+                    ? Colors.red.withValues(alpha: 0.12)
+                    : null,
+              ),
+              onPressed: _toggleObstacleMapping,
+              child: const Text('Add Obstacle'),
+            ),
+            const SizedBox(height: 8),
+            ObstacleMappingSection(
+              choosing: _mappingObstacles,
+              tool: _obstacleTool,
+              obstacles: mission.obstacles,
+              selectedId: _selectedObstacleId,
+              onCircle: () => _chooseObstacleTool(ObstacleTool.circle),
+              onSquare: () => _chooseObstacleTool(ObstacleTool.square),
+              onSelect: (id) => setState(() => _selectedObstacleId = id),
+              onRadius: _setObstacleRadius,
+              onSide: _setObstacleSide,
+              onSave: _saveSelectedObstacle,
+              onRemove: _removeSelectedObstacle,
+            ),
+          ],
         ),
-      ],
-      const SizedBox(height: 16),
-      _PointPairSection(
-        pointA: _pointA,
-        pointB: _pointB,
-        placement: _placement,
-        operationMode: _operationMode,
-        onSetA: () => _togglePlacement(_MapPlacement.pointA),
-        onSetB: () => _togglePlacement(_MapPlacement.pointB),
-        onModeChanged: (mode) => setState(() => _operationMode = mode),
       ),
-      const SizedBox(height: 16),
-      _WaypointList(
-        waypoints: mission.waypoints,
-        selectedId: selected?.id,
-        canEdit: !mission.boundaryEditingLocked,
-        activeSplit: mission.activeSplit,
-        onSelect: _selectWaypoint,
-        onDelete: _deleteWaypoint,
+      _SidebarSectionTile(
+        icon: Icons.place_outlined,
+        label: 'Waypoints',
+        expanded: _openSection == _SidebarSection.waypoints,
+        onTap: () => _toggleSidebar(_SidebarSection.waypoints),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            _WaypointList(
+              waypoints: mission.waypoints,
+              selectedId: selected?.id,
+              canEdit: !mission.boundaryEditingLocked,
+              activeSplit: mission.activeSplit,
+              onSelect: _selectWaypoint,
+              onDelete: _deleteWaypoint,
+            ),
+            const SizedBox(height: 8),
+            _WaypointDetail(
+              waypoint: selected,
+              canEdit: !mission.boundaryEditingLocked,
+              altitudeController: _altitudeController,
+              speedController: _speedController,
+              onAltitudeChanged: (altitude) => _updateSelected(altitude: altitude),
+              onSpeedChanged: (speed) => _updateSelected(speed: speed),
+              onActionChanged: (action) => _updateSelected(action: action),
+            ),
+          ],
+        ),
       ),
-      const SizedBox(height: 8),
-      _WaypointDetail(
-        waypoint: selected,
-        canEdit: !mission.boundaryEditingLocked,
-        altitudeController: _altitudeController,
-        speedController: _speedController,
-        onAltitudeChanged: (altitude) => _updateSelected(altitude: altitude),
-        onSpeedChanged: (speed) => _updateSelected(speed: speed),
-        onActionChanged: (action) => _updateSelected(action: action),
-      ),
-      const SizedBox(height: 8),
-      _FlightHistory(
-        logs: ref.read(missionRepositoryProvider.notifier).listFlightLogs(),
-      ),
-      const SizedBox(height: 12),
-      _MissionActions(
-        onSave: _saveMission,
-        onLoad: _loadMission,
-        onUpload: _uploadMission,
+      _SidebarSectionTile(
+        icon: Icons.history,
+        label: 'History',
+        expanded: _openSection == _SidebarSection.history,
+        onTap: () => _toggleSidebar(_SidebarSection.history),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            _FlightHistory(
+              logs: ref.read(missionRepositoryProvider.notifier).listFlightLogs(),
+            ),
+            const SizedBox(height: 12),
+            _MissionActions(
+              onSave: _saveMission,
+              onLoad: _loadMission,
+              onUpload: _uploadMission,
+            ),
+          ],
+        ),
       ),
     ];
+  }
+
+  void _toggleSidebar(_SidebarSection section) {
+    setState(() {
+      _openSection = _openSection == section ? null : section;
+    });
   }
 
   void _onMapTap(TapPosition tapPosition, LatLng point) {
@@ -635,7 +720,10 @@ class _GroundPlanPageState extends ConsumerState<GroundPlanPage> {
   }
 
   void _selectWaypoint(Waypoint waypoint) {
-    setState(() => _selectedWaypointId = waypoint.id);
+    setState(() {
+      _selectedWaypointId = waypoint.id;
+      _openSection = _SidebarSection.waypoints;
+    });
     _altitudeController.text = waypoint.altitude.toStringAsFixed(1);
     _speedController.text = waypoint.speed.toStringAsFixed(1);
   }
@@ -978,11 +1066,102 @@ class _IndexMarker extends StatelessWidget {
   }
 }
 
+class _SidebarSectionTile extends StatelessWidget {
+  const _SidebarSectionTile({
+    required this.icon,
+    required this.label,
+    required this.expanded,
+    required this.onTap,
+    required this.child,
+  });
+
+  final IconData icon;
+  final String label;
+  final bool expanded;
+  final VoidCallback onTap;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        InkWell(
+          onTap: onTap,
+          child: SizedBox(
+            height: 48,
+            child: Row(
+              children: [
+                Icon(icon, size: 20),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(label, style: Theme.of(context).textTheme.titleSmall),
+                ),
+                Icon(expanded ? Icons.expand_less : Icons.expand_more),
+              ],
+            ),
+          ),
+        ),
+        if (expanded)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: child,
+          ),
+        const Divider(height: 1),
+      ],
+    );
+  }
+}
+
 class _BoundaryActions extends StatelessWidget {
   const _BoundaryActions({
     required this.canUndo,
     required this.canRedo,
-    required this.canCallForJob,
+    required this.onUndo,
+    required this.onRedo,
+    required this.onReset,
+  });
+
+  final bool canUndo;
+  final bool canRedo;
+  final VoidCallback onUndo;
+  final VoidCallback onRedo;
+  final VoidCallback onReset;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        _HistoryButton(
+          tooltip: 'Undo',
+          icon: Icons.undo,
+          onPressed: canUndo ? onUndo : null,
+        ),
+        _HistoryButton(
+          tooltip: 'Redo',
+          icon: Icons.redo,
+          onPressed: canRedo ? onRedo : null,
+        ),
+        const SizedBox(width: 4),
+        Expanded(
+          child: OutlinedButton(
+            style: OutlinedButton.styleFrom(
+              minimumSize: const Size.fromHeight(48),
+            ),
+            onPressed: onReset,
+            child: const FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Text('Reset'),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _FieldSplitControls extends StatelessWidget {
+  const _FieldSplitControls({
     required this.canSplit,
     required this.splitting,
     required this.splitSlot,
@@ -991,23 +1170,14 @@ class _BoundaryActions extends StatelessWidget {
     required this.canUndoSplit,
     required this.activeSplit,
     required this.sectionCount,
-    required this.onUndo,
-    required this.onRedo,
-    required this.onReset,
-    required this.onCallForJob,
     required this.onSplit,
     required this.onUndoSplit,
     required this.onChooseFirst,
     required this.onChooseEnd,
     required this.onSelectSplitA,
     required this.onSelectSplitB,
-    required this.mappingObstacles,
-    required this.onObstacleMapping,
   });
 
-  final bool canUndo;
-  final bool canRedo;
-  final bool canCallForJob;
   final bool canSplit;
   final bool splitting;
   final _SplitSlot? splitSlot;
@@ -1016,160 +1186,92 @@ class _BoundaryActions extends StatelessWidget {
   final bool canUndoSplit;
   final int activeSplit;
   final int sectionCount;
-  final VoidCallback onUndo;
-  final VoidCallback onRedo;
-  final VoidCallback onReset;
-  final VoidCallback onCallForJob;
   final VoidCallback onSplit;
   final VoidCallback onUndoSplit;
   final VoidCallback onChooseFirst;
   final VoidCallback onChooseEnd;
   final VoidCallback onSelectSplitA;
   final VoidCallback onSelectSplitB;
-  final bool mappingObstacles;
-  final VoidCallback onObstacleMapping;
 
   @override
   Widget build(BuildContext context) {
+    if (!canSplit) {
+      return const Text('Draw at least three boundary points before splitting.');
+    }
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Row(
-          children: [
-            _HistoryButton(
-              tooltip: 'Undo',
-              icon: Icons.undo,
-              onPressed: canUndo ? onUndo : null,
-            ),
-            _HistoryButton(
-              tooltip: 'Redo',
-              icon: Icons.redo,
-              onPressed: canRedo ? onRedo : null,
-            ),
-            const SizedBox(width: 4),
-            Expanded(
-              child: OutlinedButton(
-                style: OutlinedButton.styleFrom(
-                  minimumSize: const Size.fromHeight(48),
-                ),
-                onPressed: onReset,
-                child: const FittedBox(
-                  fit: BoxFit.scaleDown,
-                  child: Text('Reset'),
-                ),
-              ),
-            ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: FilledButton(
-                style: FilledButton.styleFrom(
-                  minimumSize: const Size.fromHeight(48),
-                ),
-                onPressed: canCallForJob ? onCallForJob : null,
-                child: const FittedBox(
-                  fit: BoxFit.scaleDown,
-                  child: Text('Call for Job'),
-                ),
-              ),
-            ),
-          ],
-        ),
-        if (canSplit) ...[
-          const SizedBox(height: 8),
-          if (splitting) ...[
-            const Text(
-              'Choose First Point or End Point, then tap a boundary point or anywhere along the boundary.',
-            ),
-            const SizedBox(height: 8),
-            Row(
-              children: [
-                Expanded(
-                  child: _PlaceButton(
-                    label: 'First Point',
-                    selected: splitSlot == _SplitSlot.first,
-                    placed: firstPlaced,
-                    onPressed: onChooseFirst,
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: _PlaceButton(
-                    label: 'End Point',
-                    selected: splitSlot == _SplitSlot.end,
-                    placed: endPlaced,
-                    onPressed: onChooseEnd,
-                  ),
-                ),
-              ],
-            ),
-          ],
+        if (splitting) ...[
+          const Text(
+            'Choose First Point or End Point, then tap a boundary point or anywhere along the boundary.',
+          ),
           const SizedBox(height: 8),
           Row(
             children: [
               Expanded(
-                child: OutlinedButton(
-                  style: OutlinedButton.styleFrom(
-                    minimumSize: const Size.fromHeight(40),
-                  ),
-                  onPressed: onSplit,
-                  child: Text(splitting ? 'Cancel' : 'Split'),
+                child: _PlaceButton(
+                  label: 'First Point',
+                  selected: splitSlot == _SplitSlot.first,
+                  placed: firstPlaced,
+                  onPressed: onChooseFirst,
                 ),
               ),
               const SizedBox(width: 8),
               Expanded(
-                child: OutlinedButton(
-                  style: OutlinedButton.styleFrom(
-                    minimumSize: const Size.fromHeight(40),
-                    backgroundColor: mappingObstacles
-                        ? Colors.red.withValues(alpha: 0.12)
-                        : null,
-                  ),
-                  onPressed: onObstacleMapping,
-                  child: const FittedBox(
-                    fit: BoxFit.scaleDown,
-                    child: Text('Obstacle Mapping'),
-                  ),
+                child: _PlaceButton(
+                  label: 'End Point',
+                  selected: splitSlot == _SplitSlot.end,
+                  placed: endPlaced,
+                  onPressed: onChooseEnd,
                 ),
               ),
             ],
           ),
-          if (canUndoSplit) ...[
-            const SizedBox(height: 8),
-            OutlinedButton(
-              style: OutlinedButton.styleFrom(
-                minimumSize: const Size.fromHeight(40),
-              ),
-              onPressed: onUndoSplit,
-              child: const FittedBox(
-                fit: BoxFit.scaleDown,
-                child: Text('Undo split'),
-              ),
+          const SizedBox(height: 8),
+        ],
+        OutlinedButton(
+          style: OutlinedButton.styleFrom(
+            minimumSize: const Size.fromHeight(40),
+          ),
+          onPressed: onSplit,
+          child: Text(splitting ? 'Cancel' : 'Split'),
+        ),
+        if (canUndoSplit) ...[
+          const SizedBox(height: 8),
+          OutlinedButton(
+            style: OutlinedButton.styleFrom(
+              minimumSize: const Size.fromHeight(40),
             ),
-          ],
-          if (sectionCount > 1) ...[
-            const SizedBox(height: 8),
-            Row(
-              children: [
-                Expanded(
-                  child: _PlaceButton(
-                    label: 'Select Split A',
-                    selected: activeSplit == 0,
-                    placed: false,
-                    onPressed: onSelectSplitA,
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: _PlaceButton(
-                    label: 'Select Split B',
-                    selected: activeSplit == 1,
-                    placed: false,
-                    onPressed: onSelectSplitB,
-                  ),
-                ),
-              ],
+            onPressed: onUndoSplit,
+            child: const FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Text('Undo split'),
             ),
-          ],
+          ),
+        ],
+        if (sectionCount > 1) ...[
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Expanded(
+                child: _PlaceButton(
+                  label: 'Select Split A',
+                  selected: activeSplit == 0,
+                  placed: false,
+                  onPressed: onSelectSplitA,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: _PlaceButton(
+                  label: 'Select Split B',
+                  selected: activeSplit == 1,
+                  placed: false,
+                  onPressed: onSelectSplitB,
+                ),
+              ),
+            ],
+          ),
         ],
       ],
     );
@@ -1224,8 +1326,6 @@ class _PointPairSection extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        const Text('A/B points'),
-        const SizedBox(height: 8),
         Row(
           children: [
             Expanded(
@@ -1519,9 +1619,7 @@ class _FlightHistory extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ExpansionTile(
-      title: const Text('Flight History'),
-      tilePadding: EdgeInsets.zero,
+    return Column(
       children: [
         for (final log in logs)
           ListTile(

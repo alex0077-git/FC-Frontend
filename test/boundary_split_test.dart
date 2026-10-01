@@ -196,6 +196,8 @@ void main() {
 
     repo.addBoundaryPoint(latitude: 12.974, longitude: 77.595);
     await tester.pump();
+    await tester.tap(find.text('Split (A/B)'));
+    await tester.pump();
     await tester.tap(find.text('Split'));
     await tester.pump();
     expect(find.text('First Point'), findsOneWidget);

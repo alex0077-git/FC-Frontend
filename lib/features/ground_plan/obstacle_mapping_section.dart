@@ -8,6 +8,7 @@ enum ObstacleTool { circle, square }
 class ObstacleMappingSection extends StatelessWidget {
   const ObstacleMappingSection({
     super.key,
+    required this.choosing,
     required this.tool,
     required this.obstacles,
     required this.selectedId,
@@ -20,6 +21,7 @@ class ObstacleMappingSection extends StatelessWidget {
     required this.onRemove,
   });
 
+  final bool choosing;
   final ObstacleTool? tool;
   final List<Obstacle> obstacles;
   final String? selectedId;
@@ -40,27 +42,34 @@ class ObstacleMappingSection extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Text(_hint()),
-        const SizedBox(height: 8),
-        Row(
-          children: [
-            Expanded(
-              child: _ToolButton(
-                label: 'Circle',
-                selected: tool == ObstacleTool.circle,
-                onPressed: onCircle,
+        if (choosing) ...[
+          Text(_hint()),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Expanded(
+                child: _ToolButton(
+                  label: 'Circle',
+                  selected: tool == ObstacleTool.circle,
+                  onPressed: onCircle,
+                ),
               ),
-            ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: _ToolButton(
-                label: 'Square',
-                selected: tool == ObstacleTool.square,
-                onPressed: onSquare,
+              const SizedBox(width: 8),
+              Expanded(
+                child: _ToolButton(
+                  label: 'Square',
+                  selected: tool == ObstacleTool.square,
+                  onPressed: onSquare,
+                ),
               ),
-            ),
-          ],
-        ),
+            ],
+          ),
+        ],
+        if (obstacles.isEmpty && !choosing)
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 8),
+            child: Text('No obstacles yet'),
+          ),
         if (selected != null && selected.type == ObstacleType.circle) ...[
           const SizedBox(height: 8),
           LineSpacingControl(
