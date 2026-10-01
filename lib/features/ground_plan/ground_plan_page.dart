@@ -1,6 +1,7 @@
 import 'package:fc_frontend/core/theme/app_theme.dart';
 import 'package:fc_frontend/core/widgets/coverage_lines.dart';
 import 'package:fc_frontend/core/widgets/line_spacing_control.dart';
+import 'package:fc_frontend/data/models/boundary_point.dart';
 import 'package:fc_frontend/data/models/flight_log.dart';
 import 'package:fc_frontend/data/models/job_config.dart';
 import 'package:fc_frontend/data/models/mission.dart';
@@ -9,7 +10,10 @@ import 'package:fc_frontend/data/repositories/mission_repository.dart';
 import 'package:fc_frontend/data/repositories/telemetry_repository.dart';
 import 'package:fc_frontend/core/widgets/joystick_control.dart';
 import 'package:fc_frontend/core/widgets/responsive.dart';
+import 'package:fc_frontend/features/ground_plan/boundary_point_dialog.dart';
+import 'package:fc_frontend/features/ground_plan/boundary_point_marker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -47,46 +51,65 @@ class _GroundPlanPageState extends ConsumerState<GroundPlanPage> {
   @override
   Widget build(BuildContext context) {
     final mission = ref.watch(missionRepositoryProvider);
-    final boundary = [
-      for (final point in mission.boundaryPoints)
-        LatLng(point.latitude, point.longitude),
-    ];
     final selected = _waypointById(mission.waypoints, _selectedWaypointId);
     final hasCoverage = mission.coverageLines.isNotEmpty;
+    final canUndo =
+        !mission.boundaryEditingLocked && mission.undoHistory.isNotEmpty;
+    final canRedo =
+        !mission.boundaryEditingLocked && mission.redoHistory.isNotEmpty;
 
-    return Scaffold(
-      body: Row(
-        children: [
-          Expanded(flex: 3, child: _planMap(boundary)),
-          SizedBox(
-            width: Responsive.sidePanelWidth(context, desktopWidth: 340),
-            child: Material(
-              color: AppTheme.surface,
-              child: ListView(
-                padding: const EdgeInsets.fromLTRB(12, 12, 12, 16),
-                children: _planPanelChildren(
-                  mission: mission,
-                  selected: selected,
-                  hasCoverage: hasCoverage,
+    return CallbackShortcuts(
+      bindings: {
+        const SingleActivator(LogicalKeyboardKey.keyZ, control: true, shift: true):
+            _redoBoundary,
+        const SingleActivator(LogicalKeyboardKey.keyZ, meta: true, shift: true):
+            _redoBoundary,
+        const SingleActivator(LogicalKeyboardKey.keyY, control: true): _redoBoundary,
+        const SingleActivator(LogicalKeyboardKey.keyY, meta: true): _redoBoundary,
+        const SingleActivator(LogicalKeyboardKey.keyZ, control: true): _undoBoundary,
+        const SingleActivator(LogicalKeyboardKey.keyZ, meta: true): _undoBoundary,
+      },
+      child: Focus(
+        autofocus: true,
+        child: Scaffold(
+          body: Row(
+            children: [
+              Expanded(flex: 3, child: _planMap(mission)),
+              SizedBox(
+                width: Responsive.sidePanelWidth(context, desktopWidth: 340),
+                child: Material(
+                  color: AppTheme.surface,
+                  child: ListView(
+                    padding: const EdgeInsets.fromLTRB(12, 12, 12, 16),
+                    children: _planPanelChildren(
+                      mission: mission,
+                      selected: selected,
+                      hasCoverage: hasCoverage,
+                      canUndo: canUndo,
+                      canRedo: canRedo,
+                    ),
+                  ),
                 ),
               ),
-            ),
+            ],
           ),
-        ],
+        ),
       ),
     );
   }
 
-  Widget _planMap(List<LatLng> boundary) {
+  Widget _planMap(MissionState mission) {
     return _PlanMap(
       controller: _mapController,
-      boundary: boundary,
-      mission: ref.watch(missionRepositoryProvider),
+      mission: mission,
       pointA: _pointA,
       pointB: _pointB,
       placement: _placement,
+      editingEnabled: !mission.boundaryEditingLocked,
       onTap: _onMapTap,
       onMapReady: _frameBoundary,
+      onEditPoint: _editBoundaryPoint,
+      onMovePoint: _moveBoundaryPoint,
     );
   }
 
@@ -94,10 +117,17 @@ class _GroundPlanPageState extends ConsumerState<GroundPlanPage> {
     required MissionState mission,
     required Waypoint? selected,
     required bool hasCoverage,
+    required bool canUndo,
+    required bool canRedo,
   }) {
     return [
       _BoundaryActions(
-        canCallForJob: mission.boundaryPoints.length >= 3,
+        canUndo: canUndo,
+        canRedo: canRedo,
+        canCallForJob:
+            !mission.boundaryEditingLocked && mission.boundaryPoints.length >= 3,
+        onUndo: _undoBoundary,
+        onRedo: _redoBoundary,
         onReset: _resetBoundary,
         onCallForJob: _callForJob,
       ),
@@ -134,12 +164,14 @@ class _GroundPlanPageState extends ConsumerState<GroundPlanPage> {
       _WaypointList(
         waypoints: mission.waypoints,
         selectedId: selected?.id,
+        canEdit: !mission.boundaryEditingLocked,
         onSelect: _selectWaypoint,
         onDelete: _deleteWaypoint,
       ),
       const SizedBox(height: 8),
       _WaypointDetail(
         waypoint: selected,
+        canEdit: !mission.boundaryEditingLocked,
         altitudeController: _altitudeController,
         speedController: _speedController,
         onAltitudeChanged: (altitude) => _updateSelected(altitude: altitude),
@@ -183,6 +215,56 @@ class _GroundPlanPageState extends ConsumerState<GroundPlanPage> {
     setState(() {
       _placement = _placement == target ? _MapPlacement.boundary : target;
     });
+  }
+
+  void _undoBoundary() {
+    ref.read(missionRepositoryProvider.notifier).undoBoundaryEdit();
+  }
+
+  void _redoBoundary() {
+    ref.read(missionRepositoryProvider.notifier).redoBoundaryEdit();
+  }
+
+  void _moveBoundaryPoint(BoundaryPoint point, LatLng next) {
+    ref.read(missionRepositoryProvider.notifier).updateBoundaryPoint(
+      id: point.id,
+      latitude: next.latitude,
+      longitude: next.longitude,
+      altitude: point.altitude,
+      speed: point.speed,
+    );
+  }
+
+  Future<void> _editBoundaryPoint(BoundaryPoint point) async {
+    if (ref.read(missionRepositoryProvider).boundaryEditingLocked) {
+      return;
+    }
+
+    final result = await showDialog<BoundaryDialogResult>(
+      context: context,
+      builder: (context) => BoundaryPointDialog(point: point),
+    );
+    if (result == null || !mounted) {
+      return;
+    }
+
+    final repository = ref.read(missionRepositoryProvider.notifier);
+    if (result.deleted) {
+      repository.deleteBoundaryPoint(point.id);
+      return;
+    }
+
+    final draft = result.draft;
+    if (draft == null) {
+      return;
+    }
+    repository.updateBoundaryPoint(
+      id: point.id,
+      latitude: draft.latitude,
+      longitude: draft.longitude,
+      altitude: draft.altitude,
+      speed: draft.speed,
+    );
   }
 
   void _resetBoundary() {
@@ -364,45 +446,58 @@ Waypoint? _waypointById(List<Waypoint> waypoints, String? id) {
   return null;
 }
 
-class _PlanMap extends StatelessWidget {
+class _PlanMap extends StatefulWidget {
   const _PlanMap({
     required this.controller,
-    required this.boundary,
     required this.mission,
     required this.pointA,
     required this.pointB,
     required this.placement,
+    required this.editingEnabled,
     required this.onTap,
     required this.onMapReady,
+    required this.onEditPoint,
+    required this.onMovePoint,
   });
 
   final MapController controller;
-  final List<LatLng> boundary;
   final MissionState mission;
   final LatLng? pointA;
   final LatLng? pointB;
   final _MapPlacement placement;
+  final bool editingEnabled;
   final void Function(TapPosition tapPosition, LatLng point) onTap;
   final VoidCallback onMapReady;
+  final ValueChanged<BoundaryPoint> onEditPoint;
+  final void Function(BoundaryPoint point, LatLng next) onMovePoint;
+
+  @override
+  State<_PlanMap> createState() => _PlanMapState();
+}
+
+class _PlanMapState extends State<_PlanMap> {
+  String? _previewId;
+  LatLng? _preview;
 
   @override
   Widget build(BuildContext context) {
-    final hint = switch (placement) {
+    final hint = switch (widget.placement) {
       _MapPlacement.pointA => 'Tap the map to place point A',
       _MapPlacement.pointB => 'Tap the map to place point B',
       _MapPlacement.boundary => 'Tap the map to add a boundary point',
     };
+    final points = _displayPoints();
 
     return Stack(
       fit: StackFit.expand,
       children: [
         FlutterMap(
-          mapController: controller,
+          mapController: widget.controller,
           options: MapOptions(
             initialCenter: _mapCenter,
             initialZoom: 16,
-            onTap: onTap,
-            onMapReady: onMapReady,
+            onTap: widget.onTap,
+            onMapReady: widget.onMapReady,
             interactionOptions: InteractionOptions(
               flags: InteractiveFlag.all & ~InteractiveFlag.rotate,
               cursorKeyboardRotationOptions:
@@ -414,48 +509,66 @@ class _PlanMap extends StatelessWidget {
               urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
               userAgentPackageName: 'fc_frontend',
             ),
-            if (boundary.length >= 3)
+            if (points.length >= 3)
               PolygonLayer(
                 polygons: [
                   Polygon(
-                    points: boundary,
+                    points: points,
                     color: AppTheme.primary.withValues(alpha: 0.22),
                     borderColor: AppTheme.primary,
                     borderStrokeWidth: 2,
                   ),
                 ],
               )
-            else if (boundary.length == 2)
+            else if (points.length == 2)
               PolylineLayer(
                 polylines: [
-                  Polyline(points: boundary, color: AppTheme.primary, strokeWidth: 2),
+                  Polyline(points: points, color: AppTheme.primary, strokeWidth: 2),
                 ],
               ),
-            if (mission.coverageLines.isNotEmpty)
+            if (widget.mission.coverageLines.isNotEmpty)
               PolylineLayer(
-                polylines: coveragePolylines(mission.coverageLines),
+                polylines: coveragePolylines(widget.mission.coverageLines),
                 simplificationTolerance: 0,
                 cullingMargin: null,
               ),
             MarkerLayer(
               markers: [
-                for (final point in mission.boundaryPoints)
+                for (final point in widget.mission.boundaryPoints)
                   Marker(
+                    key: ValueKey(point.id),
                     point: LatLng(point.latitude, point.longitude),
-                    width: 28,
-                    height: 28,
-                    child: _IndexMarker(label: '${point.order + 1}'),
+                    width: 44,
+                    height: 44,
+                    child: BoundaryPointMarker(
+                      key: ValueKey(point.id),
+                      point: LatLng(point.latitude, point.longitude),
+                      label: '${point.order + 1}',
+                      enabled: widget.editingEnabled,
+                      onTap: () => widget.onEditPoint(point),
+                      onPreview: (next) => setState(() {
+                        _previewId = point.id;
+                        _preview = next;
+                      }),
+                      onCommit: (next) {
+                        widget.onMovePoint(point, next);
+                        setState(() {
+                          _previewId = null;
+                          _preview = null;
+                        });
+                      },
+                    ),
                   ),
-                if (pointA != null)
+                if (widget.pointA != null)
                   Marker(
-                    point: pointA!,
+                    point: widget.pointA!,
                     width: 28,
                     height: 28,
                     child: const _IndexMarker(label: 'A'),
                   ),
-                if (pointB != null)
+                if (widget.pointB != null)
                   Marker(
-                    point: pointB!,
+                    point: widget.pointB!,
                     width: 28,
                     height: 28,
                     child: const _IndexMarker(label: 'B'),
@@ -480,6 +593,16 @@ class _PlanMap extends StatelessWidget {
         ),
       ],
     );
+  }
+
+  List<LatLng> _displayPoints() {
+    return [
+      for (final point in widget.mission.boundaryPoints)
+        if (point.id == _previewId && _preview != null)
+          _preview!
+        else
+          LatLng(point.latitude, point.longitude),
+    ];
   }
 }
 
@@ -508,12 +631,20 @@ class _IndexMarker extends StatelessWidget {
 
 class _BoundaryActions extends StatelessWidget {
   const _BoundaryActions({
+    required this.canUndo,
+    required this.canRedo,
     required this.canCallForJob,
+    required this.onUndo,
+    required this.onRedo,
     required this.onReset,
     required this.onCallForJob,
   });
 
+  final bool canUndo;
+  final bool canRedo;
   final bool canCallForJob;
+  final VoidCallback onUndo;
+  final VoidCallback onRedo;
   final VoidCallback onReset;
   final VoidCallback onCallForJob;
 
@@ -521,13 +652,27 @@ class _BoundaryActions extends StatelessWidget {
   Widget build(BuildContext context) {
     return Row(
       children: [
+        _HistoryButton(
+          tooltip: 'Undo',
+          icon: Icons.undo,
+          onPressed: canUndo ? onUndo : null,
+        ),
+        _HistoryButton(
+          tooltip: 'Redo',
+          icon: Icons.redo,
+          onPressed: canRedo ? onRedo : null,
+        ),
+        const SizedBox(width: 4),
         Expanded(
           child: OutlinedButton(
             style: OutlinedButton.styleFrom(
               minimumSize: const Size.fromHeight(48),
             ),
             onPressed: onReset,
-            child: const Text('Reset'),
+            child: const FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Text('Reset'),
+            ),
           ),
         ),
         const SizedBox(width: 8),
@@ -535,10 +680,37 @@ class _BoundaryActions extends StatelessWidget {
           child: FilledButton(
             style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
             onPressed: canCallForJob ? onCallForJob : null,
-            child: const Text('Call for Job'),
+            child: const FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Text('Call for Job'),
+            ),
           ),
         ),
       ],
+    );
+  }
+}
+
+class _HistoryButton extends StatelessWidget {
+  const _HistoryButton({
+    required this.tooltip,
+    required this.icon,
+    required this.onPressed,
+  });
+
+  final String tooltip;
+  final IconData icon;
+  final VoidCallback? onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return IconButton(
+      tooltip: tooltip,
+      onPressed: onPressed,
+      icon: Icon(icon, size: 18),
+      visualDensity: VisualDensity.compact,
+      padding: EdgeInsets.zero,
+      constraints: const BoxConstraints.tightFor(width: 36, height: 40),
     );
   }
 }
@@ -648,12 +820,14 @@ class _WaypointList extends StatelessWidget {
   const _WaypointList({
     required this.waypoints,
     required this.selectedId,
+    required this.canEdit,
     required this.onSelect,
     required this.onDelete,
   });
 
   final List<Waypoint> waypoints;
   final String? selectedId;
+  final bool canEdit;
   final ValueChanged<Waypoint> onSelect;
   final ValueChanged<String> onDelete;
 
@@ -681,6 +855,7 @@ class _WaypointList extends StatelessWidget {
                   index: index,
                   waypoint: waypoint,
                   selected: waypoint.id == selectedId,
+                  canEdit: canEdit,
                   onSelect: () => onSelect(waypoint),
                   onDelete: () => onDelete(waypoint.id),
                 );
@@ -697,6 +872,7 @@ class _WaypointRow extends StatelessWidget {
     required this.index,
     required this.waypoint,
     required this.selected,
+    required this.canEdit,
     required this.onSelect,
     required this.onDelete,
   });
@@ -704,6 +880,7 @@ class _WaypointRow extends StatelessWidget {
   final int index;
   final Waypoint waypoint;
   final bool selected;
+  final bool canEdit;
   final VoidCallback onSelect;
   final VoidCallback onDelete;
 
@@ -723,12 +900,12 @@ class _WaypointRow extends StatelessWidget {
         children: [
           IconButton(
             tooltip: 'Edit waypoint ${index + 1}',
-            onPressed: onSelect,
+            onPressed: canEdit ? onSelect : null,
             icon: const Icon(Icons.edit_outlined),
           ),
           IconButton(
             tooltip: 'Delete waypoint ${index + 1}',
-            onPressed: onDelete,
+            onPressed: canEdit ? onDelete : null,
             icon: const Icon(Icons.delete_outline),
           ),
         ],
@@ -740,6 +917,7 @@ class _WaypointRow extends StatelessWidget {
 class _WaypointDetail extends StatelessWidget {
   const _WaypointDetail({
     required this.waypoint,
+    required this.canEdit,
     required this.altitudeController,
     required this.speedController,
     required this.onAltitudeChanged,
@@ -748,6 +926,7 @@ class _WaypointDetail extends StatelessWidget {
   });
 
   final Waypoint? waypoint;
+  final bool canEdit;
   final TextEditingController altitudeController;
   final TextEditingController speedController;
   final ValueChanged<double> onAltitudeChanged;
@@ -766,34 +945,40 @@ class _WaypointDetail extends StatelessWidget {
         else ...[
           TextField(
             controller: altitudeController,
+            readOnly: !canEdit,
             decoration: const InputDecoration(
               labelText: 'Altitude',
               suffixText: 'm',
               isDense: true,
             ),
             keyboardType: const TextInputType.numberWithOptions(decimal: true),
-            onChanged: (value) {
-              final altitude = double.tryParse(value);
-              if (altitude != null) {
-                onAltitudeChanged(altitude);
-              }
-            },
+            onChanged: canEdit
+                ? (value) {
+                    final altitude = double.tryParse(value);
+                    if (altitude != null) {
+                      onAltitudeChanged(altitude);
+                    }
+                  }
+                : null,
           ),
           const SizedBox(height: 8),
           TextField(
             controller: speedController,
+            readOnly: !canEdit,
             decoration: const InputDecoration(
               labelText: 'Speed',
               suffixText: 'm/s',
               isDense: true,
             ),
             keyboardType: const TextInputType.numberWithOptions(decimal: true),
-            onChanged: (value) {
-              final speed = double.tryParse(value);
-              if (speed != null) {
-                onSpeedChanged(speed);
-              }
-            },
+            onChanged: canEdit
+                ? (value) {
+                    final speed = double.tryParse(value);
+                    if (speed != null) {
+                      onSpeedChanged(speed);
+                    }
+                  }
+                : null,
           ),
           const SizedBox(height: 8),
           DropdownButtonFormField<WaypointAction>(
@@ -816,11 +1001,13 @@ class _WaypointDetail extends StatelessWidget {
                 child: Text('Land'),
               ),
             ],
-            onChanged: (action) {
-              if (action != null) {
-                onActionChanged(action);
-              }
-            },
+            onChanged: canEdit
+                ? (action) {
+                    if (action != null) {
+                      onActionChanged(action);
+                    }
+                  }
+                : null,
           ),
         ],
       ],

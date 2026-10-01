@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math';
 
+import 'package:fc_frontend/data/models/boundary_edit.dart';
 import 'package:fc_frontend/data/models/boundary_point.dart';
 import 'package:fc_frontend/data/models/coverage_line.dart';
 import 'package:fc_frontend/data/models/flight_log.dart';
@@ -20,6 +21,9 @@ class MissionState {
     this.savedMissions = const [],
     this.spacingMeters = 1,
     this.orientationDegrees = 0,
+    this.undoHistory = const [],
+    this.redoHistory = const [],
+    this.boundaryEditingLocked = false,
   });
 
   final List<BoundaryPoint> boundaryPoints;
@@ -28,6 +32,12 @@ class MissionState {
   final List<Mission> savedMissions;
   final double spacingMeters;
   final double orientationDegrees;
+  final List<BoundaryEdit> undoHistory;
+  final List<BoundaryEdit> redoHistory;
+
+  /// True after Call for Job has built coverage. Planning edits stay off
+  /// so undo cannot change those coverage lines.
+  final bool boundaryEditingLocked;
 
   MissionState copyWith({
     List<BoundaryPoint>? boundaryPoints,
@@ -36,6 +46,9 @@ class MissionState {
     List<Mission>? savedMissions,
     double? spacingMeters,
     double? orientationDegrees,
+    List<BoundaryEdit>? undoHistory,
+    List<BoundaryEdit>? redoHistory,
+    bool? boundaryEditingLocked,
   }) {
     return MissionState(
       boundaryPoints: boundaryPoints ?? this.boundaryPoints,
@@ -44,6 +57,10 @@ class MissionState {
       savedMissions: savedMissions ?? this.savedMissions,
       spacingMeters: spacingMeters ?? this.spacingMeters,
       orientationDegrees: orientationDegrees ?? this.orientationDegrees,
+      undoHistory: undoHistory ?? this.undoHistory,
+      redoHistory: redoHistory ?? this.redoHistory,
+      boundaryEditingLocked:
+          boundaryEditingLocked ?? this.boundaryEditingLocked,
     );
   }
 }
@@ -68,16 +85,119 @@ class MissionRepository extends StateNotifier<MissionState> {
     required double latitude,
     required double longitude,
   }) {
+    if (state.boundaryEditingLocked) {
+      return;
+    }
+
+    final before = List<BoundaryPoint>.of(state.boundaryPoints);
     final point = BoundaryPoint(
       id: _nextId('boundary'),
       latitude: latitude,
       longitude: longitude,
-      order: state.boundaryPoints.length,
+      order: before.length,
     );
+    _commitBoundaryEdit(
+      kind: BoundaryEditKind.add,
+      before: before,
+      after: [...before, point],
+      clearDerived: true,
+    );
+  }
+
+  void updateBoundaryPoint({
+    required String id,
+    required double latitude,
+    required double longitude,
+    required double altitude,
+    required double speed,
+  }) {
+    if (state.boundaryEditingLocked) {
+      return;
+    }
+
+    final before = List<BoundaryPoint>.of(state.boundaryPoints);
+    final index = before.indexWhere((point) => point.id == id);
+    if (index == -1) {
+      return;
+    }
+
+    final current = before[index];
+    if (_sameBoundaryPoint(
+      current,
+      latitude: latitude,
+      longitude: longitude,
+      altitude: altitude,
+      speed: speed,
+    )) {
+      return;
+    }
+
+    final after = [
+      for (final point in before)
+        if (point.id == id)
+          point.copyWith(
+            latitude: latitude,
+            longitude: longitude,
+            altitude: altitude,
+            speed: speed,
+          )
+        else
+          point,
+    ];
+    _commitBoundaryEdit(
+      kind: BoundaryEditKind.move,
+      before: before,
+      after: after,
+    );
+  }
+
+  void deleteBoundaryPoint(String id) {
+    if (state.boundaryEditingLocked) {
+      return;
+    }
+
+    final before = List<BoundaryPoint>.of(state.boundaryPoints);
+    if (!before.any((point) => point.id == id)) {
+      return;
+    }
+
+    final kept = before.where((point) => point.id != id).toList();
+    final after = [
+      for (var index = 0; index < kept.length; index++)
+        kept[index].copyWith(order: index),
+    ];
+    _commitBoundaryEdit(
+      kind: BoundaryEditKind.delete,
+      before: before,
+      after: after,
+    );
+  }
+
+  void undoBoundaryEdit() {
+    if (state.boundaryEditingLocked || state.undoHistory.isEmpty) {
+      return;
+    }
+
+    final undo = [...state.undoHistory];
+    final edit = undo.removeLast();
     state = state.copyWith(
-      boundaryPoints: List.unmodifiable([...state.boundaryPoints, point]),
-      coverageLines: const [],
-      waypoints: const [],
+      boundaryPoints: List.unmodifiable(edit.before),
+      undoHistory: List.unmodifiable(undo),
+      redoHistory: List.unmodifiable([...state.redoHistory, edit]),
+    );
+  }
+
+  void redoBoundaryEdit() {
+    if (state.boundaryEditingLocked || state.redoHistory.isEmpty) {
+      return;
+    }
+
+    final redo = [...state.redoHistory];
+    final edit = redo.removeLast();
+    state = state.copyWith(
+      boundaryPoints: List.unmodifiable(edit.after),
+      undoHistory: List.unmodifiable([...state.undoHistory, edit]),
+      redoHistory: List.unmodifiable(redo),
     );
   }
 
@@ -86,6 +206,29 @@ class MissionRepository extends StateNotifier<MissionState> {
       boundaryPoints: const [],
       coverageLines: const [],
       waypoints: const [],
+      undoHistory: const [],
+      redoHistory: const [],
+      boundaryEditingLocked: false,
+    );
+  }
+
+  void _commitBoundaryEdit({
+    required BoundaryEditKind kind,
+    required List<BoundaryPoint> before,
+    required List<BoundaryPoint> after,
+    bool clearDerived = false,
+  }) {
+    final edit = BoundaryEdit(
+      kind: kind,
+      before: List.unmodifiable(before),
+      after: List.unmodifiable(after),
+    );
+    state = state.copyWith(
+      boundaryPoints: List.unmodifiable(after),
+      undoHistory: List.unmodifiable([...state.undoHistory, edit]),
+      redoHistory: const [],
+      coverageLines: clearDerived ? const [] : state.coverageLines,
+      waypoints: clearDerived ? const [] : state.waypoints,
     );
   }
 
@@ -98,6 +241,9 @@ class MissionRepository extends StateNotifier<MissionState> {
     _pendingSpacing = null;
     _pendingOrientation = null;
     _publishNow(spacingMeters, orientationDegrees);
+    if (state.coverageLines.isNotEmpty) {
+      state = state.copyWith(boundaryEditingLocked: true);
+    }
   }
 
   /// Applies the latest spacing and line angle. The first call paints
@@ -258,6 +404,9 @@ class MissionRepository extends StateNotifier<MissionState> {
   }
 
   void updateWaypoint(Waypoint waypoint) {
+    if (state.boundaryEditingLocked) {
+      return;
+    }
     final index = state.waypoints.indexWhere((item) => item.id == waypoint.id);
     if (index == -1) {
       return;
@@ -269,6 +418,9 @@ class MissionRepository extends StateNotifier<MissionState> {
   }
 
   void deleteWaypoint(String id) {
+    if (state.boundaryEditingLocked) {
+      return;
+    }
     state = state.copyWith(
       waypoints: List.unmodifiable(
         state.waypoints.where((waypoint) => waypoint.id != id),
@@ -327,6 +479,19 @@ class MissionRepository extends StateNotifier<MissionState> {
     _sequence += 1;
     return '$prefix-$_sequence';
   }
+}
+
+bool _sameBoundaryPoint(
+  BoundaryPoint point, {
+  required double latitude,
+  required double longitude,
+  required double altitude,
+  required double speed,
+}) {
+  return point.latitude == latitude &&
+      point.longitude == longitude &&
+      point.altitude == altitude &&
+      point.speed == speed;
 }
 
 final missionRepositoryProvider =
