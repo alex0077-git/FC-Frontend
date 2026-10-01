@@ -85,8 +85,6 @@ class MockTelemetrySource implements TelemetrySource {
         altitude: 30 + sin(phase * 0.05) * 0.4,
         speed: 4,
         heading: _heading,
-        roll: sin(phase * 0.08) * 4,
-        pitch: cos(phase * 0.06) * 2,
         battery: _battery,
         gpsCount: 12 + (_ticks ~/ 20) % 3,
         mode: 'AUTO',

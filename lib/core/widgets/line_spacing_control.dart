@@ -7,12 +7,18 @@ class LineSpacingControl extends StatelessWidget {
     required this.lowerMeters,
     required this.upperMeters,
     required this.onChanged,
+    this.title = 'Line Spacing',
+    this.decreaseTooltip = 'Decrease spacing',
+    this.increaseTooltip = 'Increase spacing',
   });
 
   final double spacingMeters;
   final double lowerMeters;
   final double upperMeters;
   final ValueChanged<double> onChanged;
+  final String title;
+  final String decreaseTooltip;
+  final String increaseTooltip;
 
   @override
   Widget build(BuildContext context) {
@@ -20,13 +26,13 @@ class LineSpacingControl extends StatelessWidget {
     final atMax = spacingMeters >= upperMeters - 0.001;
     return Column(
       children: [
-        const Text('Line Spacing'),
+        Text(title),
         const SizedBox(height: 4),
         Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             IconButton(
-              tooltip: 'Decrease spacing',
+              tooltip: decreaseTooltip,
               style: IconButton.styleFrom(minimumSize: const Size(48, 48)),
               onPressed: atMin
                   ? null
@@ -35,7 +41,7 @@ class LineSpacingControl extends StatelessWidget {
             ),
             Text(_label(spacingMeters), style: Theme.of(context).textTheme.titleMedium),
             IconButton(
-              tooltip: 'Increase spacing',
+              tooltip: increaseTooltip,
               style: IconButton.styleFrom(minimumSize: const Size(48, 48)),
               onPressed: atMax
                   ? null

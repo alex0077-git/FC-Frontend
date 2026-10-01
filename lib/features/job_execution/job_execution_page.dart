@@ -1,5 +1,6 @@
 ﻿import 'package:fc_frontend/core/theme/app_theme.dart';
 import 'package:fc_frontend/core/widgets/coverage_lines.dart';
+import 'package:fc_frontend/core/widgets/obstacle_map_layers.dart';
 import 'package:fc_frontend/core/widgets/joystick_control.dart';
 import 'package:fc_frontend/core/widgets/line_spacing_control.dart';
 import 'package:fc_frontend/core/widgets/responsive.dart';
@@ -210,10 +211,12 @@ class _JobMap extends StatelessWidget {
             polylines: coveragePolylines(
               mission.coverageLines,
               highlightedIndex: activeIndex,
+              activeSplit: mission.activeSplit,
             ),
             simplificationTolerance: 0,
             cullingMargin: null,
           ),
+        ...obstacleMapLayers(obstacles: mission.obstacles),
         if (drone != null)
           MarkerLayer(
             markers: [

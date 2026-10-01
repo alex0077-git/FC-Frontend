@@ -1,11 +1,13 @@
 import 'dart:async';
 import 'dart:math';
 
+import 'package:fc_frontend/core/geometry/boundary_split.dart';
 import 'package:fc_frontend/data/models/boundary_edit.dart';
 import 'package:fc_frontend/data/models/boundary_point.dart';
 import 'package:fc_frontend/data/models/coverage_line.dart';
 import 'package:fc_frontend/data/models/flight_log.dart';
 import 'package:fc_frontend/data/models/mission.dart';
+import 'package:fc_frontend/data/models/obstacle.dart';
 import 'package:fc_frontend/data/models/waypoint.dart';
 import 'package:flutter_riverpod/legacy.dart';
 import 'package:latlong2/latlong.dart';
@@ -23,7 +25,11 @@ class MissionState {
     this.orientationDegrees = 0,
     this.undoHistory = const [],
     this.redoHistory = const [],
+    this.splits = const [],
+    this.obstacles = const [],
     this.boundaryEditingLocked = false,
+    this.activeSplit = -1,
+    this.coverageBlockedByObstacle = false,
   });
 
   final List<BoundaryPoint> boundaryPoints;
@@ -34,10 +40,20 @@ class MissionState {
   final double orientationDegrees;
   final List<BoundaryEdit> undoHistory;
   final List<BoundaryEdit> redoHistory;
+  final List<SplitCut> splits;
+  final List<Obstacle> obstacles;
 
   /// True after Call for Job has built coverage. Planning edits stay off
   /// so undo cannot change those coverage lines.
   final bool boundaryEditingLocked;
+
+  /// -1 shows every split. 0 keeps Split A active. 1 keeps Split B active.
+  final int activeSplit;
+
+  /// True only if a coverage waypoint still landed inside a no-fly zone after
+  /// the outside portions of each pass were kept. A normal circle or square
+  /// cut does not set this.
+  final bool coverageBlockedByObstacle;
 
   MissionState copyWith({
     List<BoundaryPoint>? boundaryPoints,
@@ -48,7 +64,11 @@ class MissionState {
     double? orientationDegrees,
     List<BoundaryEdit>? undoHistory,
     List<BoundaryEdit>? redoHistory,
+    List<SplitCut>? splits,
+    List<Obstacle>? obstacles,
     bool? boundaryEditingLocked,
+    int? activeSplit,
+    bool? coverageBlockedByObstacle,
   }) {
     return MissionState(
       boundaryPoints: boundaryPoints ?? this.boundaryPoints,
@@ -59,8 +79,13 @@ class MissionState {
       orientationDegrees: orientationDegrees ?? this.orientationDegrees,
       undoHistory: undoHistory ?? this.undoHistory,
       redoHistory: redoHistory ?? this.redoHistory,
+      splits: splits ?? this.splits,
+      obstacles: obstacles ?? this.obstacles,
       boundaryEditingLocked:
           boundaryEditingLocked ?? this.boundaryEditingLocked,
+      activeSplit: activeSplit ?? this.activeSplit,
+      coverageBlockedByObstacle:
+          coverageBlockedByObstacle ?? this.coverageBlockedByObstacle,
     );
   }
 }
@@ -81,12 +106,15 @@ class MissionRepository extends StateNotifier<MissionState> {
     super.dispose();
   }
 
-  void addBoundaryPoint({
+  bool addBoundaryPoint({
     required double latitude,
     required double longitude,
   }) {
     if (state.boundaryEditingLocked) {
-      return;
+      return false;
+    }
+    if (isPointInsideAnyObstacle(LatLng(latitude, longitude))) {
+      return false;
     }
 
     final before = List<BoundaryPoint>.of(state.boundaryPoints);
@@ -102,9 +130,10 @@ class MissionRepository extends StateNotifier<MissionState> {
       after: [...before, point],
       clearDerived: true,
     );
+    return true;
   }
 
-  void updateBoundaryPoint({
+  bool updateBoundaryPoint({
     required String id,
     required double latitude,
     required double longitude,
@@ -112,13 +141,13 @@ class MissionRepository extends StateNotifier<MissionState> {
     required double speed,
   }) {
     if (state.boundaryEditingLocked) {
-      return;
+      return false;
     }
 
     final before = List<BoundaryPoint>.of(state.boundaryPoints);
     final index = before.indexWhere((point) => point.id == id);
     if (index == -1) {
-      return;
+      return false;
     }
 
     final current = before[index];
@@ -129,7 +158,10 @@ class MissionRepository extends StateNotifier<MissionState> {
       altitude: altitude,
       speed: speed,
     )) {
-      return;
+      return true;
+    }
+    if (isPointInsideAnyObstacle(LatLng(latitude, longitude))) {
+      return false;
     }
 
     final after = [
@@ -149,6 +181,7 @@ class MissionRepository extends StateNotifier<MissionState> {
       before: before,
       after: after,
     );
+    return true;
   }
 
   void deleteBoundaryPoint(String id) {
@@ -184,6 +217,7 @@ class MissionRepository extends StateNotifier<MissionState> {
       boundaryPoints: List.unmodifiable(edit.before),
       undoHistory: List.unmodifiable(undo),
       redoHistory: List.unmodifiable([...state.redoHistory, edit]),
+      splits: const [],
     );
   }
 
@@ -198,6 +232,7 @@ class MissionRepository extends StateNotifier<MissionState> {
       boundaryPoints: List.unmodifiable(edit.after),
       undoHistory: List.unmodifiable([...state.undoHistory, edit]),
       redoHistory: List.unmodifiable(redo),
+      splits: const [],
     );
   }
 
@@ -208,8 +243,216 @@ class MissionRepository extends StateNotifier<MissionState> {
       waypoints: const [],
       undoHistory: const [],
       redoHistory: const [],
+      splits: const [],
+      obstacles: const [],
       boundaryEditingLocked: false,
+      activeSplit: -1,
+      coverageBlockedByObstacle: false,
     );
+  }
+
+  String addCircleObstacle(LatLng center) {
+    final obstacle = Obstacle(
+      id: _nextId('obstacle'),
+      type: ObstacleType.circle,
+      center: center,
+      radiusMeters: Obstacle.defaultRadiusMeters,
+    );
+    _setObstacles([...state.obstacles, obstacle]);
+    return obstacle.id;
+  }
+
+  String addSquareObstacle(LatLng center) {
+    final obstacle = Obstacle(
+      id: _nextId('obstacle'),
+      type: ObstacleType.square,
+      center: center,
+      sideMeters: Obstacle.defaultSideMeters,
+      finalized: false,
+    );
+    _setObstacles([...state.obstacles, obstacle]);
+    return obstacle.id;
+  }
+
+  void updateObstacleRadius(String id, double newRadius) {
+    final index = state.obstacles.indexWhere((obstacle) => obstacle.id == id);
+    if (index == -1) {
+      return;
+    }
+    final current = state.obstacles[index];
+    if (current.type != ObstacleType.circle || current.center == null) {
+      return;
+    }
+    final radius = newRadius
+        .clamp(Obstacle.minSizeMeters, Obstacle.maxSizeMeters)
+        .toDouble();
+    if (current.radiusMeters == radius) {
+      return;
+    }
+    _setObstacles([
+      for (final obstacle in state.obstacles)
+        if (obstacle.id == id)
+          Obstacle(
+            id: id,
+            type: ObstacleType.circle,
+            center: current.center,
+            radiusMeters: radius,
+          )
+        else
+          obstacle,
+    ]);
+  }
+
+  void updateObstacleSide(String id, double sideMeters) {
+    final index = state.obstacles.indexWhere((obstacle) => obstacle.id == id);
+    if (index == -1) {
+      return;
+    }
+    final current = state.obstacles[index];
+    if (current.type != ObstacleType.square ||
+        current.center == null ||
+        current.finalized) {
+      return;
+    }
+    final side = sideMeters
+        .clamp(Obstacle.minSizeMeters, Obstacle.maxSizeMeters)
+        .toDouble();
+    if (current.sideMeters == side) {
+      return;
+    }
+    _setObstacles([
+      for (final obstacle in state.obstacles)
+        if (obstacle.id == id)
+          Obstacle(
+            id: id,
+            type: ObstacleType.square,
+            center: current.center,
+            sideMeters: side,
+            finalized: false,
+          )
+        else
+          obstacle,
+    ]);
+  }
+
+  void saveObstacle(String id) {
+    final index = state.obstacles.indexWhere((obstacle) => obstacle.id == id);
+    if (index == -1) {
+      return;
+    }
+    final current = state.obstacles[index];
+    if (current.type != ObstacleType.square || current.finalized) {
+      return;
+    }
+    state = state.copyWith(
+      obstacles: List.unmodifiable([
+        for (final obstacle in state.obstacles)
+          if (obstacle.id == id)
+            Obstacle(
+              id: id,
+              type: ObstacleType.square,
+              center: current.center,
+              sideMeters: current.sideMeters,
+              finalized: true,
+            )
+          else
+            obstacle,
+      ]),
+    );
+  }
+
+  void removeObstacle(String id) {
+    if (!state.obstacles.any((obstacle) => obstacle.id == id)) {
+      return;
+    }
+    _setObstacles([
+      for (final obstacle in state.obstacles)
+        if (obstacle.id != id) obstacle,
+    ]);
+  }
+
+  /// Buffer expansion, when it is added later, stays inside [Obstacle.contains].
+  bool isPointInsideAnyObstacle(LatLng point) {
+    for (final obstacle in state.obstacles) {
+      if (obstacle.contains(point)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  Obstacle? obstacleAt(LatLng point) {
+    for (final obstacle in state.obstacles.reversed) {
+      if (obstacle.contains(point)) {
+        return obstacle;
+      }
+    }
+    return null;
+  }
+
+  void _setObstacles(List<Obstacle> obstacles) {
+    final hadCoverage = state.coverageLines.isNotEmpty;
+    state = state.copyWith(obstacles: List.unmodifiable(obstacles));
+    if (hadCoverage && state.boundaryPoints.length >= 3) {
+      _publishNow(state.spacingMeters, state.orientationDegrees);
+    }
+  }
+
+  /// Separates the field at two boundary positions. Returns false when those
+  /// positions do not divide the field into two sides.
+  bool splitBoundary({
+    required double startLatitude,
+    required double startLongitude,
+    required double endLatitude,
+    required double endLongitude,
+  }) {
+    if (state.boundaryPoints.length < 3) {
+      return false;
+    }
+
+    final ring = _ringOf(state.boundaryPoints);
+    final cut = SplitCut(
+      LatLng(startLatitude, startLongitude),
+      LatLng(endLatitude, endLongitude),
+    );
+    final after = boundarySections(ring, [cut]);
+    if (after.length < 2) {
+      return false;
+    }
+
+    final hadCoverage = state.coverageLines.isNotEmpty;
+    state = state.copyWith(
+      splits: List.unmodifiable([cut]),
+      activeSplit: -1,
+    );
+    if (hadCoverage) {
+      _publishNow(state.spacingMeters, state.orientationDegrees);
+    }
+    return true;
+  }
+
+  /// Removes the latest cut and rebuilds the flight lines when they exist.
+  void selectSplit(int section) {
+    if (section != 0 && section != 1) {
+      return;
+    }
+    state = state.copyWith(activeSplit: section);
+  }
+
+  void undoSplit() {
+    if (state.splits.isEmpty) {
+      return;
+    }
+
+    final cuts = [...state.splits]..removeLast();
+    final hadCoverage = state.coverageLines.isNotEmpty;
+    state = state.copyWith(
+      splits: List.unmodifiable(cuts),
+      activeSplit: -1,
+    );
+    if (hadCoverage) {
+      _publishNow(state.spacingMeters, state.orientationDegrees);
+    }
   }
 
   void _commitBoundaryEdit({
@@ -227,8 +470,12 @@ class MissionRepository extends StateNotifier<MissionState> {
       boundaryPoints: List.unmodifiable(after),
       undoHistory: List.unmodifiable([...state.undoHistory, edit]),
       redoHistory: const [],
+      splits: const [],
       coverageLines: clearDerived ? const [] : state.coverageLines,
       waypoints: clearDerived ? const [] : state.waypoints,
+      coverageBlockedByObstacle: clearDerived
+          ? false
+          : state.coverageBlockedByObstacle,
     );
   }
 
@@ -303,11 +550,110 @@ class MissionRepository extends StateNotifier<MissionState> {
             10)
         .clamp(lower, upper)
         .toDouble();
-    final request = _requestFromState(
+    final sample = _requestFromState(
       spacingMeters: spacing,
       orientationDegrees: orientationDegrees,
     );
-    _publishCoverage(request, _coverageGeometry(request));
+    final ring = _ringOf(state.boundaryPoints);
+    final sections = boundarySections(ring, state.splits);
+    final lines = <List<double>>[];
+    final sectionIndexes = <int>[];
+    final routeBreaks = <bool>[];
+    final waypointLatitudes = <double>[];
+    final waypointLongitudes = <double>[];
+    final waypointSections = <int>[];
+    var blockedByObstacle = false;
+    for (var sectionIndex = 0; sectionIndex < sections.length; sectionIndex++) {
+      final section = sections[sectionIndex];
+      final geometry = _coverageGeometry(
+        _CoverageRequest(
+          latitudes: [for (final point in section) point.latitude],
+          longitudes: [for (final point in section) point.longitude],
+          orders: [for (var index = 0; index < section.length; index++) index],
+          spacingMeters: spacing,
+          orientationDegrees: orientationDegrees,
+          altitude: sample.altitude,
+          speed: sample.speed,
+          actionIndex: sample.actionIndex,
+        ),
+      );
+      var breakNext = false;
+      LatLng? previousEnd;
+      for (final line in geometry.lines) {
+        final start = LatLng(line[0], line[1]);
+        final end = LatLng(line[2], line[3]);
+        if (lineRunsAlongCut(start, end, ring, state.splits)) {
+          continue;
+        }
+        final pieces = _piecesOutsideObstacles(start, end);
+        if (pieces.isEmpty) {
+          breakNext = true;
+          continue;
+        }
+        for (var pieceIndex = 0; pieceIndex < pieces.length; pieceIndex++) {
+          final piece = pieces[pieceIndex];
+          var startsRoute = breakNext || pieceIndex > 0;
+          if (!startsRoute &&
+              previousEnd != null &&
+              _piecesOutsideObstacles(previousEnd, piece.$1).length != 1) {
+            startsRoute = true;
+          }
+          lines.add([
+            piece.$1.latitude,
+            piece.$1.longitude,
+            piece.$2.latitude,
+            piece.$2.longitude,
+          ]);
+          sectionIndexes.add(sectionIndex);
+          routeBreaks.add(startsRoute);
+          _appendWaypoints(
+            piece.$1,
+            piece.$2,
+            waypointLatitudes,
+            waypointLongitudes,
+            waypointSections,
+            sectionIndex,
+            isPointInsideAnyObstacle,
+          );
+          breakNext = false;
+          previousEnd = piece.$2;
+        }
+      }
+    }
+    _publishCoverage(
+      sample,
+      _CoverageGeometry(
+        lines: lines,
+        waypointLatitudes: waypointLatitudes,
+        waypointLongitudes: waypointLongitudes,
+        waypointSections: waypointSections,
+        sectionIndexes: sectionIndexes,
+        routeBreaks: routeBreaks,
+      ),
+      blockedByObstacle: blockedByObstacle,
+    );
+  }
+
+  /// Keeps every part of a pass that is outside every obstacle. A circle and a
+  /// square use the same rule: [Obstacle.outsidePieces] drops a stretch only
+  /// when its midpoint is inside that shape.
+  List<(LatLng, LatLng)> _piecesOutsideObstacles(LatLng start, LatLng end) {
+    var pieces = <(LatLng, LatLng)>[(start, end)];
+    for (final obstacle in state.obstacles) {
+      final next = <(LatLng, LatLng)>[];
+      for (final piece in pieces) {
+        next.addAll(obstacle.outsidePieces(piece.$1, piece.$2));
+      }
+      pieces = next;
+    }
+    return pieces;
+  }
+
+  static List<LatLng> _ringOf(List<BoundaryPoint> points) {
+    final ordered = [...points]..sort((a, b) => a.order.compareTo(b.order));
+    return [
+      for (final point in ordered) LatLng(point.latitude, point.longitude),
+    ];
   }
 
   static double lineSpacingUpperBound(List<BoundaryPoint> points) {
@@ -371,35 +717,56 @@ class MissionRepository extends StateNotifier<MissionState> {
     );
   }
 
-  void _publishCoverage(_CoverageRequest request, _CoverageGeometry geometry) {
+  void _publishCoverage(
+    _CoverageRequest request,
+    _CoverageGeometry geometry, {
+    required bool blockedByObstacle,
+  }) {
     final action = WaypointAction.values[request.actionIndex];
     final lines = <CoverageLine>[
       for (var index = 0; index < geometry.lines.length; index++)
         CoverageLine(
-          id: _nextId('coverage'),
           endpoints: [
             LatLng(geometry.lines[index][0], geometry.lines[index][1]),
             LatLng(geometry.lines[index][2], geometry.lines[index][3]),
           ],
-          lineIndex: index,
+          sectionIndex: index < geometry.sectionIndexes.length
+              ? geometry.sectionIndexes[index]
+              : 0,
+          startsRoute: index < geometry.routeBreaks.length && geometry.routeBreaks[index],
         ),
     ];
-    final waypoints = <Waypoint>[
-      for (var index = 0; index < geometry.waypointLatitudes.length; index++)
+    final waypoints = <Waypoint>[];
+    var blocked = blockedByObstacle;
+    for (var index = 0; index < geometry.waypointLatitudes.length; index++) {
+      final point = LatLng(
+        geometry.waypointLatitudes[index],
+        geometry.waypointLongitudes[index],
+      );
+      if (isPointInsideAnyObstacle(point)) {
+        blocked = true;
+        continue;
+      }
+      waypoints.add(
         Waypoint(
           id: _nextId('waypoint'),
-          latitude: geometry.waypointLatitudes[index],
-          longitude: geometry.waypointLongitudes[index],
+          latitude: point.latitude,
+          longitude: point.longitude,
           altitude: request.altitude,
           speed: request.speed,
           action: action,
+          sectionIndex: index < geometry.waypointSections.length
+              ? geometry.waypointSections[index]
+              : 0,
         ),
-    ];
+      );
+    }
     state = state.copyWith(
       coverageLines: List.unmodifiable(lines),
       waypoints: List.unmodifiable(waypoints),
       spacingMeters: request.spacingMeters,
       orientationDegrees: request.orientationDegrees,
+      coverageBlockedByObstacle: blocked,
     );
   }
 
@@ -409,6 +776,13 @@ class MissionRepository extends StateNotifier<MissionState> {
     }
     final index = state.waypoints.indexWhere((item) => item.id == waypoint.id);
     if (index == -1) {
+      return;
+    }
+    final current = state.waypoints[index];
+    final moved = current.latitude != waypoint.latitude ||
+        current.longitude != waypoint.longitude;
+    if (moved &&
+        isPointInsideAnyObstacle(LatLng(waypoint.latitude, waypoint.longitude))) {
       return;
     }
 
@@ -433,7 +807,6 @@ class MissionRepository extends StateNotifier<MissionState> {
       id: _nextId('mission'),
       name: name,
       waypoints: List.unmodifiable(state.waypoints),
-      createdAt: DateTime.now(),
     );
     state = state.copyWith(
       savedMissions: List.unmodifiable([...state.savedMissions, mission]),
@@ -455,19 +828,16 @@ class MissionRepository extends StateNotifier<MissionState> {
   List<FlightLog> listFlightLogs() {
     return [
       FlightLog(
-        id: 'log-1',
         date: DateTime.utc(2026, 9, 26, 6, 40),
         durationSeconds: 754,
         status: 'completed',
       ),
       FlightLog(
-        id: 'log-2',
         date: DateTime.utc(2026, 9, 28, 7, 15),
         durationSeconds: 512,
         status: 'completed',
       ),
       FlightLog(
-        id: 'log-3',
         date: DateTime.utc(2026, 9, 29, 16, 5),
         durationSeconds: 186,
         status: 'aborted',
@@ -526,12 +896,18 @@ class _CoverageGeometry {
     required this.lines,
     required this.waypointLatitudes,
     required this.waypointLongitudes,
+    this.sectionIndexes = const [],
+    this.waypointSections = const [],
+    this.routeBreaks = const [],
   });
 
   /// Each line is `[startLat, startLng, endLat, endLng]`.
   final List<List<double>> lines;
+  final List<int> sectionIndexes;
+  final List<bool> routeBreaks;
   final List<double> waypointLatitudes;
   final List<double> waypointLongitudes;
+  final List<int> waypointSections;
 }
 
 class _LocalPoint {
@@ -626,7 +1002,6 @@ _CoverageGeometry _coverageGeometry(_CoverageRequest request) {
         to.latitude,
         to.longitude,
       ]);
-      _appendWaypoints(from, to, waypointLatitudes, waypointLongitudes);
     }
   }
 
@@ -730,11 +1105,14 @@ List<double> _horizontalCrossings(List<_LocalPoint> polygon, double y) {
   return unique;
 }
 
-void _appendWaypoints(
+bool _appendWaypoints(
   LatLng start,
   LatLng end,
   List<double> latitudes,
   List<double> longitudes,
+  List<int> sections,
+  int sectionIndex,
+  bool Function(LatLng point) blocked,
 ) {
   const intervalMeters = 12.0;
   const interiorBudget = 2500;
@@ -742,11 +1120,22 @@ void _appendWaypoints(
   final steps = length < 1 || latitudes.length >= interiorBudget
       ? 1
       : max(1, (length / intervalMeters).ceil());
+  var droppedInside = false;
   for (var step = 0; step <= steps; step++) {
     final t = step / steps;
-    latitudes.add(start.latitude + (end.latitude - start.latitude) * t);
-    longitudes.add(start.longitude + (end.longitude - start.longitude) * t);
+    final point = LatLng(
+      start.latitude + (end.latitude - start.latitude) * t,
+      start.longitude + (end.longitude - start.longitude) * t,
+    );
+    if (blocked(point)) {
+      droppedInside = true;
+      continue;
+    }
+    latitudes.add(point.latitude);
+    longitudes.add(point.longitude);
+    sections.add(sectionIndex);
   }
+  return droppedInside;
 }
 
 double _cosineDegrees(double degrees) {

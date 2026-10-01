@@ -11,6 +11,7 @@ class BoundaryPointMarker extends StatefulWidget {
     required this.point,
     required this.label,
     required this.enabled,
+    this.dimmed = false,
     required this.onTap,
     required this.onPreview,
     required this.onCommit,
@@ -19,6 +20,7 @@ class BoundaryPointMarker extends StatefulWidget {
   final LatLng point;
   final String label;
   final bool enabled;
+  final bool dimmed;
   final VoidCallback onTap;
   final ValueChanged<LatLng> onPreview;
   final ValueChanged<LatLng> onCommit;
@@ -44,13 +46,25 @@ class _BoundaryPointMarkerState extends State<BoundaryPointMarker> {
 
   @override
   Widget build(BuildContext context) {
+    final disc = Transform.translate(
+      offset: _shift,
+      child: _PointDisc(
+        label: widget.label,
+        highlighted: _dragging,
+        dimmed: widget.dimmed,
+      ),
+    );
+    if (!widget.enabled) {
+      return GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: widget.onTap,
+        child: disc,
+      );
+    }
     return RawGestureDetector(
       behavior: HitTestBehavior.opaque,
-      gestures: widget.enabled ? _gestures() : const {},
-      child: Transform.translate(
-        offset: _shift,
-        child: _PointDisc(label: widget.label, highlighted: _dragging),
-      ),
+      gestures: _gestures(),
+      child: disc,
     );
   }
 
@@ -134,10 +148,15 @@ class _BoundaryPointMarkerState extends State<BoundaryPointMarker> {
 }
 
 class _PointDisc extends StatelessWidget {
-  const _PointDisc({required this.label, required this.highlighted});
+  const _PointDisc({
+    required this.label,
+    required this.highlighted,
+    required this.dimmed,
+  });
 
   final String label;
   final bool highlighted;
+  final bool dimmed;
 
   @override
   Widget build(BuildContext context) {
@@ -150,7 +169,7 @@ class _PointDisc extends StatelessWidget {
           width: highlighted ? 36 : 28,
           height: highlighted ? 36 : 28,
           decoration: BoxDecoration(
-            color: AppTheme.primary,
+            color: dimmed ? const Color(0xFF94A3B8) : AppTheme.primary,
             shape: BoxShape.circle,
             border: Border.all(
               color: Colors.white,

@@ -8,6 +8,7 @@ class Waypoint {
     required this.altitude,
     required this.speed,
     required this.action,
+    this.sectionIndex = 0,
   });
 
   final String id;
@@ -16,6 +17,7 @@ class Waypoint {
   final double altitude;
   final double speed;
   final WaypointAction action;
+  final int sectionIndex;
 
   Waypoint copyWith({
     double? altitude,
@@ -29,6 +31,7 @@ class Waypoint {
       altitude: altitude ?? this.altitude,
       speed: speed ?? this.speed,
       action: action ?? this.action,
+      sectionIndex: sectionIndex,
     );
   }
 }

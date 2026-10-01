@@ -14,11 +14,6 @@ class Responsive {
     return widthOf(context) < mobileMaxWidth;
   }
 
-  static bool isTablet(BuildContext context) {
-    final width = widthOf(context);
-    return width >= mobileMaxWidth && width < desktopMinWidth;
-  }
-
   static bool isDesktop(BuildContext context) {
     return widthOf(context) >= desktopMinWidth;
   }

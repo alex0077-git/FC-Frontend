@@ -1,6 +1,8 @@
+import 'package:fc_frontend/core/geometry/boundary_split.dart';
 import 'package:fc_frontend/core/theme/app_theme.dart';
 import 'package:fc_frontend/core/widgets/coverage_lines.dart';
 import 'package:fc_frontend/core/widgets/line_spacing_control.dart';
+import 'package:fc_frontend/core/widgets/obstacle_map_layers.dart';
 import 'package:fc_frontend/data/models/boundary_point.dart';
 import 'package:fc_frontend/data/models/flight_log.dart';
 import 'package:fc_frontend/data/models/job_config.dart';
@@ -12,6 +14,7 @@ import 'package:fc_frontend/core/widgets/joystick_control.dart';
 import 'package:fc_frontend/core/widgets/responsive.dart';
 import 'package:fc_frontend/features/ground_plan/boundary_point_dialog.dart';
 import 'package:fc_frontend/features/ground_plan/boundary_point_marker.dart';
+import 'package:fc_frontend/features/ground_plan/obstacle_mapping_section.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_map/flutter_map.dart';
@@ -21,7 +24,17 @@ import 'package:latlong2/latlong.dart';
 
 const _mapCenter = LatLng(12.9716, 77.5946);
 
-enum _MapPlacement { boundary, pointA, pointB }
+List<LatLng> _boundaryRing(MissionState mission) {
+  final ordered = [...mission.boundaryPoints]
+    ..sort((a, b) => a.order.compareTo(b.order));
+  return [
+    for (final point in ordered) LatLng(point.latitude, point.longitude),
+  ];
+}
+
+enum _MapPlacement { boundary, pointA, pointB, split }
+
+enum _SplitSlot { first, end }
 
 class GroundPlanPage extends ConsumerStatefulWidget {
   const GroundPlanPage({super.key});
@@ -38,8 +51,14 @@ class _GroundPlanPageState extends ConsumerState<GroundPlanPage> {
   _MapPlacement _placement = _MapPlacement.boundary;
   LatLng? _pointA;
   LatLng? _pointB;
+  _SplitSlot? _splitSlot;
+  LatLng? _splitFirst;
+  LatLng? _splitEnd;
   String _operationMode = 'Spray';
   String? _selectedWaypointId;
+  bool _mappingObstacles = false;
+  ObstacleTool? _obstacleTool;
+  String? _selectedObstacleId;
 
   @override
   void dispose() {
@@ -57,6 +76,20 @@ class _GroundPlanPageState extends ConsumerState<GroundPlanPage> {
         !mission.boundaryEditingLocked && mission.undoHistory.isNotEmpty;
     final canRedo =
         !mission.boundaryEditingLocked && mission.redoHistory.isNotEmpty;
+    ref.listen(missionRepositoryProvider, (previous, next) {
+      final becameBlocked = next.coverageBlockedByObstacle &&
+          previous?.coverageBlockedByObstacle != true;
+      if (!becameBlocked) {
+        return;
+      }
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          _showMessage(
+            'Coverage path intersects a no-fly zone -- review manually',
+          );
+        }
+      });
+    });
 
     return CallbackShortcuts(
       bindings: {
@@ -99,12 +132,21 @@ class _GroundPlanPageState extends ConsumerState<GroundPlanPage> {
   }
 
   Widget _planMap(MissionState mission) {
+    final savedSplit = mission.splits.isEmpty ? null : mission.splits.last;
     return _PlanMap(
       controller: _mapController,
       mission: mission,
       pointA: _pointA,
       pointB: _pointB,
       placement: _placement,
+      splitFirst: _placement == _MapPlacement.split
+          ? _splitFirst
+          : savedSplit?.start,
+      splitEnd: _placement == _MapPlacement.split ? _splitEnd : savedSplit?.end,
+      obstacleMapping: _mappingObstacles,
+      obstacleTool: _obstacleTool,
+      selectedObstacleId: _selectedObstacleId,
+      onMarkSplit: _markSplit,
       editingEnabled: !mission.boundaryEditingLocked,
       onTap: _onMapTap,
       onMapReady: _frameBoundary,
@@ -126,11 +168,42 @@ class _GroundPlanPageState extends ConsumerState<GroundPlanPage> {
         canRedo: canRedo,
         canCallForJob:
             !mission.boundaryEditingLocked && mission.boundaryPoints.length >= 3,
+        canSplit: mission.boundaryPoints.length >= 3,
+        splitting: _placement == _MapPlacement.split,
+        splitSlot: _splitSlot,
+        firstPlaced: _splitFirst != null,
+        endPlaced: _splitEnd != null,
+        canUndoSplit: mission.splits.isNotEmpty,
+        activeSplit: mission.activeSplit,
+        sectionCount: _sectionCount(mission),
         onUndo: _undoBoundary,
         onRedo: _redoBoundary,
         onReset: _resetBoundary,
         onCallForJob: _callForJob,
+        onSplit: _toggleSplit,
+        onUndoSplit: _undoSplit,
+        onChooseFirst: () => _chooseSplitSlot(_SplitSlot.first),
+        onChooseEnd: () => _chooseSplitSlot(_SplitSlot.end),
+        onSelectSplitA: () => _selectSplit(0),
+        onSelectSplitB: () => _selectSplit(1),
+        mappingObstacles: _mappingObstacles,
+        onObstacleMapping: _toggleObstacleMapping,
       ),
+      if (_mappingObstacles) ...[
+        const SizedBox(height: 8),
+        ObstacleMappingSection(
+          tool: _obstacleTool,
+          obstacles: mission.obstacles,
+          selectedId: _selectedObstacleId,
+          onCircle: () => _chooseObstacleTool(ObstacleTool.circle),
+          onSquare: () => _chooseObstacleTool(ObstacleTool.square),
+          onSelect: (id) => setState(() => _selectedObstacleId = id),
+          onRadius: _setObstacleRadius,
+          onSide: _setObstacleSide,
+          onSave: _saveSelectedObstacle,
+          onRemove: _removeSelectedObstacle,
+        ),
+      ],
       if (hasCoverage) ...[
         const SizedBox(height: 16),
         JoystickControl(
@@ -165,6 +238,7 @@ class _GroundPlanPageState extends ConsumerState<GroundPlanPage> {
         waypoints: mission.waypoints,
         selectedId: selected?.id,
         canEdit: !mission.boundaryEditingLocked,
+        activeSplit: mission.activeSplit,
         onSelect: _selectWaypoint,
         onDelete: _deleteWaypoint,
       ),
@@ -192,6 +266,10 @@ class _GroundPlanPageState extends ConsumerState<GroundPlanPage> {
   }
 
   void _onMapTap(TapPosition tapPosition, LatLng point) {
+    if (_mappingObstacles) {
+      _onObstacleTap(point);
+      return;
+    }
     switch (_placement) {
       case _MapPlacement.pointA:
         setState(() {
@@ -204,15 +282,200 @@ class _GroundPlanPageState extends ConsumerState<GroundPlanPage> {
           _placement = _MapPlacement.boundary;
         });
       case _MapPlacement.boundary:
-        ref.read(missionRepositoryProvider.notifier).addBoundaryPoint(
-          latitude: point.latitude,
-          longitude: point.longitude,
-        );
+        _placeBoundaryPoint(point);
+      case _MapPlacement.split:
+        _markSplit(point, onBoundary: false);
     }
+  }
+
+  void _toggleSplit() {
+    setState(() {
+      _clearObstacleMapping();
+      _clearSplitDraft();
+      if (_placement == _MapPlacement.split) {
+        _placement = _MapPlacement.boundary;
+      } else {
+        _placement = _MapPlacement.split;
+        _splitSlot = _SplitSlot.first;
+      }
+    });
+  }
+
+  void _toggleObstacleMapping() {
+    setState(() {
+      if (_mappingObstacles) {
+        _clearObstacleMapping();
+      } else {
+        _clearSplitDraft();
+        _placement = _MapPlacement.boundary;
+        _mappingObstacles = true;
+      }
+    });
+  }
+
+  void _chooseObstacleTool(ObstacleTool tool) {
+    setState(() {
+      _clearSplitDraft();
+      _placement = _MapPlacement.boundary;
+      _mappingObstacles = true;
+      _obstacleTool = tool;
+      _selectedObstacleId = null;
+    });
+  }
+
+  void _clearObstacleMapping() {
+    _mappingObstacles = false;
+    _obstacleTool = null;
+    _selectedObstacleId = null;
+  }
+
+  void _onObstacleTap(LatLng point) {
+    final repository = ref.read(missionRepositoryProvider.notifier);
+    final hit = repository.obstacleAt(point);
+    if (_obstacleTool == ObstacleTool.circle) {
+      if (hit != null) {
+        setState(() => _selectedObstacleId = hit.id);
+        return;
+      }
+      setState(() => _selectedObstacleId = repository.addCircleObstacle(point));
+      return;
+    }
+    if (_obstacleTool == ObstacleTool.square) {
+      if (hit != null) {
+        setState(() => _selectedObstacleId = hit.id);
+        return;
+      }
+      setState(() => _selectedObstacleId = repository.addSquareObstacle(point));
+      return;
+    }
+    if (hit != null) {
+      setState(() => _selectedObstacleId = hit.id);
+      return;
+    }
+    _showMessage('Choose Circle or Square first.');
+  }
+
+  void _setObstacleRadius(double meters) {
+    final id = _selectedObstacleId;
+    if (id == null) {
+      return;
+    }
+    ref.read(missionRepositoryProvider.notifier).updateObstacleRadius(id, meters);
+  }
+
+  void _setObstacleSide(double meters) {
+    final id = _selectedObstacleId;
+    if (id == null) {
+      return;
+    }
+    ref.read(missionRepositoryProvider.notifier).updateObstacleSide(id, meters);
+  }
+
+  void _saveSelectedObstacle() {
+    final id = _selectedObstacleId;
+    if (id == null) {
+      return;
+    }
+    ref.read(missionRepositoryProvider.notifier).saveObstacle(id);
+  }
+
+  void _removeSelectedObstacle() {
+    final id = _selectedObstacleId;
+    if (id == null) {
+      return;
+    }
+    ref.read(missionRepositoryProvider.notifier).removeObstacle(id);
+    setState(() => _selectedObstacleId = null);
+  }
+
+  void _placeBoundaryPoint(LatLng point) {
+    final repository = ref.read(missionRepositoryProvider.notifier);
+    if (repository.isPointInsideAnyObstacle(point)) {
+      _showMessage('Cannot place a waypoint inside a no-fly zone');
+      return;
+    }
+    repository.addBoundaryPoint(
+      latitude: point.latitude,
+      longitude: point.longitude,
+    );
+  }
+
+  void _chooseSplitSlot(_SplitSlot slot) {
+    setState(() {
+      _clearObstacleMapping();
+      _placement = _MapPlacement.split;
+      _splitSlot = slot;
+    });
+  }
+
+  void _markSplit(LatLng point, {required bool onBoundary}) {
+    final slot = _splitSlot;
+    if (_placement != _MapPlacement.split || slot == null) {
+      _showMessage('Choose First Point or End Point first.');
+      return;
+    }
+    final ring = _boundaryRing(ref.read(missionRepositoryProvider));
+    final snapped = onBoundary ? point : snapToBoundary(ring, point);
+    if (snapped == null) {
+      _showMessage('Place the point on the boundary.');
+      return;
+    }
+    setState(() {
+      if (slot == _SplitSlot.first) {
+        _splitFirst = snapped;
+        _splitSlot = _SplitSlot.end;
+      } else {
+        _splitEnd = snapped;
+      }
+    });
+    _commitSplitIfReady();
+  }
+
+  void _commitSplitIfReady() {
+    final first = _splitFirst;
+    final end = _splitEnd;
+    if (first == null || end == null) {
+      return;
+    }
+    final split = ref.read(missionRepositoryProvider.notifier).splitBoundary(
+      startLatitude: first.latitude,
+      startLongitude: first.longitude,
+      endLatitude: end.latitude,
+      endLongitude: end.longitude,
+    );
+    if (!split) {
+      _showMessage('Those two points do not separate the field. Choose another point.');
+    }
+  }
+
+  void _selectSplit(int section) {
+    ref.read(missionRepositoryProvider.notifier).selectSplit(section);
+  }
+
+  void _clearSplitDraft() {
+    _splitSlot = null;
+    _splitFirst = null;
+    _splitEnd = null;
+  }
+
+  void _undoSplit() {
+    ref.read(missionRepositoryProvider.notifier).undoSplit();
+    setState(() {
+      _clearSplitDraft();
+      _placement = _MapPlacement.boundary;
+    });
+  }
+
+  int _sectionCount(MissionState mission) {
+    if (mission.boundaryPoints.length < 3 || mission.splits.isEmpty) {
+      return 1;
+    }
+    return boundarySections(_boundaryRing(mission), mission.splits).length;
   }
 
   void _togglePlacement(_MapPlacement target) {
     setState(() {
+      _clearObstacleMapping();
       _placement = _placement == target ? _MapPlacement.boundary : target;
     });
   }
@@ -226,7 +489,12 @@ class _GroundPlanPageState extends ConsumerState<GroundPlanPage> {
   }
 
   void _moveBoundaryPoint(BoundaryPoint point, LatLng next) {
-    ref.read(missionRepositoryProvider.notifier).updateBoundaryPoint(
+    final repository = ref.read(missionRepositoryProvider.notifier);
+    if (repository.isPointInsideAnyObstacle(next)) {
+      _showMessage('Cannot place a waypoint inside a no-fly zone');
+      return;
+    }
+    repository.updateBoundaryPoint(
       id: point.id,
       latitude: next.latitude,
       longitude: next.longitude,
@@ -258,6 +526,12 @@ class _GroundPlanPageState extends ConsumerState<GroundPlanPage> {
     if (draft == null) {
       return;
     }
+    if (repository.isPointInsideAnyObstacle(
+      LatLng(draft.latitude, draft.longitude),
+    )) {
+      _showMessage('Cannot place a waypoint inside a no-fly zone');
+      return;
+    }
     repository.updateBoundaryPoint(
       id: point.id,
       latitude: draft.latitude,
@@ -269,7 +543,12 @@ class _GroundPlanPageState extends ConsumerState<GroundPlanPage> {
 
   void _resetBoundary() {
     ref.read(missionRepositoryProvider.notifier).resetBoundary();
-    setState(() => _selectedWaypointId = null);
+    setState(() {
+      _selectedWaypointId = null;
+      _clearSplitDraft();
+      _clearObstacleMapping();
+      _placement = _MapPlacement.boundary;
+    });
   }
 
   Future<void> _callForJob() async {
@@ -453,11 +732,17 @@ class _PlanMap extends StatefulWidget {
     required this.pointA,
     required this.pointB,
     required this.placement,
+    required this.splitFirst,
+    required this.splitEnd,
+    required this.obstacleMapping,
+    required this.obstacleTool,
+    required this.selectedObstacleId,
     required this.editingEnabled,
     required this.onTap,
     required this.onMapReady,
     required this.onEditPoint,
     required this.onMovePoint,
+    required this.onMarkSplit,
   });
 
   final MapController controller;
@@ -465,11 +750,17 @@ class _PlanMap extends StatefulWidget {
   final LatLng? pointA;
   final LatLng? pointB;
   final _MapPlacement placement;
+  final LatLng? splitFirst;
+  final LatLng? splitEnd;
+  final bool obstacleMapping;
+  final ObstacleTool? obstacleTool;
+  final String? selectedObstacleId;
   final bool editingEnabled;
   final void Function(TapPosition tapPosition, LatLng point) onTap;
   final VoidCallback onMapReady;
   final ValueChanged<BoundaryPoint> onEditPoint;
   final void Function(BoundaryPoint point, LatLng next) onMovePoint;
+  final void Function(LatLng point, {required bool onBoundary}) onMarkSplit;
 
   @override
   State<_PlanMap> createState() => _PlanMapState();
@@ -481,11 +772,18 @@ class _PlanMapState extends State<_PlanMap> {
 
   @override
   Widget build(BuildContext context) {
-    final hint = switch (widget.placement) {
-      _MapPlacement.pointA => 'Tap the map to place point A',
-      _MapPlacement.pointB => 'Tap the map to place point B',
-      _MapPlacement.boundary => 'Tap the map to add a boundary point',
-    };
+    final hint = widget.obstacleMapping
+        ? switch (widget.obstacleTool) {
+            ObstacleTool.circle => 'Tap the map to place a circle no-fly zone',
+            ObstacleTool.square => 'Tap the map to place a square no-fly zone',
+            null => 'Choose Circle or Square',
+          }
+        : switch (widget.placement) {
+            _MapPlacement.pointA => 'Tap the map to place point A',
+            _MapPlacement.pointB => 'Tap the map to place point B',
+            _MapPlacement.split => 'Tap the boundary for the selected point',
+            _MapPlacement.boundary => 'Tap the map to add a boundary point',
+          };
     final points = _displayPoints();
 
     return Stack(
@@ -528,10 +826,17 @@ class _PlanMapState extends State<_PlanMap> {
               ),
             if (widget.mission.coverageLines.isNotEmpty)
               PolylineLayer(
-                polylines: coveragePolylines(widget.mission.coverageLines),
+                polylines: coveragePolylines(
+                  widget.mission.coverageLines,
+                  activeSplit: widget.mission.activeSplit,
+                ),
                 simplificationTolerance: 0,
                 cullingMargin: null,
               ),
+            ...obstacleMapLayers(
+              obstacles: widget.mission.obstacles,
+              selectedId: widget.selectedObstacleId,
+            ),
             MarkerLayer(
               markers: [
                 for (final point in widget.mission.boundaryPoints)
@@ -544,8 +849,25 @@ class _PlanMapState extends State<_PlanMap> {
                       key: ValueKey(point.id),
                       point: LatLng(point.latitude, point.longitude),
                       label: '${point.order + 1}',
-                      enabled: widget.editingEnabled,
-                      onTap: () => widget.onEditPoint(point),
+                      dimmed: _boundaryDimmed(
+                        LatLng(point.latitude, point.longitude),
+                      ),
+                      enabled: widget.editingEnabled &&
+                          widget.placement != _MapPlacement.split &&
+                          !_boundaryDimmed(
+                            LatLng(point.latitude, point.longitude),
+                          ),
+                      onTap: () {
+                        final here = LatLng(point.latitude, point.longitude);
+                        if (_boundaryDimmed(here)) {
+                          return;
+                        }
+                        if (widget.placement == _MapPlacement.split) {
+                          widget.onMarkSplit(here, onBoundary: true);
+                          return;
+                        }
+                        widget.onEditPoint(point);
+                      },
                       onPreview: (next) => setState(() {
                         _previewId = point.id;
                         _preview = next;
@@ -573,6 +895,20 @@ class _PlanMapState extends State<_PlanMap> {
                     height: 28,
                     child: const _IndexMarker(label: 'B'),
                   ),
+                if (widget.splitFirst != null)
+                  Marker(
+                    point: widget.splitFirst!,
+                    width: 36,
+                    height: 36,
+                    child: const _IndexMarker(label: 'F'),
+                  ),
+                if (widget.splitEnd != null)
+                  Marker(
+                    point: widget.splitEnd!,
+                    width: 36,
+                    height: 36,
+                    child: const _IndexMarker(label: 'E'),
+                  ),
               ],
             ),
           ],
@@ -593,6 +929,19 @@ class _PlanMapState extends State<_PlanMap> {
         ),
       ],
     );
+  }
+
+  bool _boundaryDimmed(LatLng point) {
+    final mission = widget.mission;
+    if (mission.activeSplit < 0 || mission.splits.isEmpty) {
+      return false;
+    }
+    final side = exclusiveSplitSide(
+      _boundaryRing(mission),
+      mission.splits,
+      point,
+    );
+    return side != null && side != mission.activeSplit;
   }
 
   List<LatLng> _displayPoints() {
@@ -634,58 +983,194 @@ class _BoundaryActions extends StatelessWidget {
     required this.canUndo,
     required this.canRedo,
     required this.canCallForJob,
+    required this.canSplit,
+    required this.splitting,
+    required this.splitSlot,
+    required this.firstPlaced,
+    required this.endPlaced,
+    required this.canUndoSplit,
+    required this.activeSplit,
+    required this.sectionCount,
     required this.onUndo,
     required this.onRedo,
     required this.onReset,
     required this.onCallForJob,
+    required this.onSplit,
+    required this.onUndoSplit,
+    required this.onChooseFirst,
+    required this.onChooseEnd,
+    required this.onSelectSplitA,
+    required this.onSelectSplitB,
+    required this.mappingObstacles,
+    required this.onObstacleMapping,
   });
 
   final bool canUndo;
   final bool canRedo;
   final bool canCallForJob;
+  final bool canSplit;
+  final bool splitting;
+  final _SplitSlot? splitSlot;
+  final bool firstPlaced;
+  final bool endPlaced;
+  final bool canUndoSplit;
+  final int activeSplit;
+  final int sectionCount;
   final VoidCallback onUndo;
   final VoidCallback onRedo;
   final VoidCallback onReset;
   final VoidCallback onCallForJob;
+  final VoidCallback onSplit;
+  final VoidCallback onUndoSplit;
+  final VoidCallback onChooseFirst;
+  final VoidCallback onChooseEnd;
+  final VoidCallback onSelectSplitA;
+  final VoidCallback onSelectSplitB;
+  final bool mappingObstacles;
+  final VoidCallback onObstacleMapping;
 
   @override
   Widget build(BuildContext context) {
-    return Row(
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        _HistoryButton(
-          tooltip: 'Undo',
-          icon: Icons.undo,
-          onPressed: canUndo ? onUndo : null,
-        ),
-        _HistoryButton(
-          tooltip: 'Redo',
-          icon: Icons.redo,
-          onPressed: canRedo ? onRedo : null,
-        ),
-        const SizedBox(width: 4),
-        Expanded(
-          child: OutlinedButton(
-            style: OutlinedButton.styleFrom(
-              minimumSize: const Size.fromHeight(48),
+        Row(
+          children: [
+            _HistoryButton(
+              tooltip: 'Undo',
+              icon: Icons.undo,
+              onPressed: canUndo ? onUndo : null,
             ),
-            onPressed: onReset,
-            child: const FittedBox(
-              fit: BoxFit.scaleDown,
-              child: Text('Reset'),
+            _HistoryButton(
+              tooltip: 'Redo',
+              icon: Icons.redo,
+              onPressed: canRedo ? onRedo : null,
             ),
+            const SizedBox(width: 4),
+            Expanded(
+              child: OutlinedButton(
+                style: OutlinedButton.styleFrom(
+                  minimumSize: const Size.fromHeight(48),
+                ),
+                onPressed: onReset,
+                child: const FittedBox(
+                  fit: BoxFit.scaleDown,
+                  child: Text('Reset'),
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: FilledButton(
+                style: FilledButton.styleFrom(
+                  minimumSize: const Size.fromHeight(48),
+                ),
+                onPressed: canCallForJob ? onCallForJob : null,
+                child: const FittedBox(
+                  fit: BoxFit.scaleDown,
+                  child: Text('Call for Job'),
+                ),
+              ),
+            ),
+          ],
+        ),
+        if (canSplit) ...[
+          const SizedBox(height: 8),
+          if (splitting) ...[
+            const Text(
+              'Choose First Point or End Point, then tap a boundary point or anywhere along the boundary.',
+            ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Expanded(
+                  child: _PlaceButton(
+                    label: 'First Point',
+                    selected: splitSlot == _SplitSlot.first,
+                    placed: firstPlaced,
+                    onPressed: onChooseFirst,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: _PlaceButton(
+                    label: 'End Point',
+                    selected: splitSlot == _SplitSlot.end,
+                    placed: endPlaced,
+                    onPressed: onChooseEnd,
+                  ),
+                ),
+              ],
+            ),
+          ],
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton(
+                  style: OutlinedButton.styleFrom(
+                    minimumSize: const Size.fromHeight(40),
+                  ),
+                  onPressed: onSplit,
+                  child: Text(splitting ? 'Cancel' : 'Split'),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: OutlinedButton(
+                  style: OutlinedButton.styleFrom(
+                    minimumSize: const Size.fromHeight(40),
+                    backgroundColor: mappingObstacles
+                        ? Colors.red.withValues(alpha: 0.12)
+                        : null,
+                  ),
+                  onPressed: onObstacleMapping,
+                  child: const FittedBox(
+                    fit: BoxFit.scaleDown,
+                    child: Text('Obstacle Mapping'),
+                  ),
+                ),
+              ),
+            ],
           ),
-        ),
-        const SizedBox(width: 8),
-        Expanded(
-          child: FilledButton(
-            style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
-            onPressed: canCallForJob ? onCallForJob : null,
-            child: const FittedBox(
-              fit: BoxFit.scaleDown,
-              child: Text('Call for Job'),
+          if (canUndoSplit) ...[
+            const SizedBox(height: 8),
+            OutlinedButton(
+              style: OutlinedButton.styleFrom(
+                minimumSize: const Size.fromHeight(40),
+              ),
+              onPressed: onUndoSplit,
+              child: const FittedBox(
+                fit: BoxFit.scaleDown,
+                child: Text('Undo split'),
+              ),
             ),
-          ),
-        ),
+          ],
+          if (sectionCount > 1) ...[
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Expanded(
+                  child: _PlaceButton(
+                    label: 'Select Split A',
+                    selected: activeSplit == 0,
+                    placed: false,
+                    onPressed: onSelectSplitA,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: _PlaceButton(
+                    label: 'Select Split B',
+                    selected: activeSplit == 1,
+                    placed: false,
+                    onPressed: onSelectSplitB,
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ],
       ],
     );
   }
@@ -821,6 +1306,7 @@ class _WaypointList extends StatelessWidget {
     required this.waypoints,
     required this.selectedId,
     required this.canEdit,
+    required this.activeSplit,
     required this.onSelect,
     required this.onDelete,
   });
@@ -828,6 +1314,7 @@ class _WaypointList extends StatelessWidget {
   final List<Waypoint> waypoints;
   final String? selectedId;
   final bool canEdit;
+  final int activeSplit;
   final ValueChanged<Waypoint> onSelect;
   final ValueChanged<String> onDelete;
 
@@ -851,11 +1338,13 @@ class _WaypointList extends StatelessWidget {
               itemCount: waypoints.length,
               itemBuilder: (context, index) {
                 final waypoint = waypoints[index];
+                final dimmed = activeSplit >= 0 && waypoint.sectionIndex != activeSplit;
                 return _WaypointRow(
                   index: index,
                   waypoint: waypoint,
-                  selected: waypoint.id == selectedId,
-                  canEdit: canEdit,
+                  selected: waypoint.id == selectedId && !dimmed,
+                  dimmed: dimmed,
+                  canEdit: canEdit && !dimmed,
                   onSelect: () => onSelect(waypoint),
                   onDelete: () => onDelete(waypoint.id),
                 );
@@ -872,6 +1361,7 @@ class _WaypointRow extends StatelessWidget {
     required this.index,
     required this.waypoint,
     required this.selected,
+    required this.dimmed,
     required this.canEdit,
     required this.onSelect,
     required this.onDelete,
@@ -880,20 +1370,27 @@ class _WaypointRow extends StatelessWidget {
   final int index;
   final Waypoint waypoint;
   final bool selected;
+  final bool dimmed;
   final bool canEdit;
   final VoidCallback onSelect;
   final VoidCallback onDelete;
 
   @override
   Widget build(BuildContext context) {
+    final muted = dimmed ? const Color(0xFF94A3B8) : null;
     return ListTile(
       dense: true,
       selected: selected,
+      enabled: !dimmed,
       contentPadding: EdgeInsets.zero,
-      title: Text('Waypoint ${index + 1}'),
+      title: Text(
+        'Waypoint ${index + 1}',
+        style: TextStyle(color: muted),
+      ),
       subtitle: Text(
         '${waypoint.altitude.toStringAsFixed(1)} m · '
         '${waypoint.speed.toStringAsFixed(1)} m/s',
+        style: TextStyle(color: muted),
       ),
       trailing: Row(
         mainAxisSize: MainAxisSize.min,
