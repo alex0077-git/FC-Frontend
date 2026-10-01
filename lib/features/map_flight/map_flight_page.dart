@@ -160,19 +160,20 @@ class _BatteryBanner extends StatelessWidget {
 
     return Material(
       color: color.withValues(alpha: 0.18),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-        child: Row(
-          children: [
-            Icon(Icons.warning_amber_rounded, size: 16, color: color),
-            const SizedBox(width: 8),
-            Text(
-              message,
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                color: color,
+      child: SizedBox(
+        height: 22,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8),
+          child: Row(
+            children: [
+              Icon(Icons.warning_amber_rounded, size: 14, color: color),
+              const SizedBox(width: 6),
+              Text(
+                message,
+                style: TextStyle(fontSize: 11, height: 1.1, color: color),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );

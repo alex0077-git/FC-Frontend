@@ -19,61 +19,64 @@ class FlightStatusBar extends ConsumerWidget {
     final battery = telemetry?.battery;
     final batteryColor = _batteryColor(battery, settings, statusColors);
 
+    final percent = battery == null ? null : battery.clamp(0, 100) / 100;
+
     return Material(
       color: AppTheme.surface,
       child: SizedBox(
-        height: 48,
-        child: Row(
-          children: [
-            Expanded(
-              child: _StatusChip(
-                icon: Icons.battery_std,
-                label: battery == null
-                    ? 'Battery --'
-                    : 'Battery ${battery.toStringAsFixed(1)}%',
-                color: batteryColor,
+        height: 32,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8),
+          child: Row(
+            children: [
+              _BatteryReadout(fraction: percent, color: batteryColor),
+              const SizedBox(width: 12),
+              Expanded(
+                child: _StatusChip(
+                  icon: Icons.satellite_alt,
+                  label: telemetry == null
+                      ? 'GPS --'
+                      : 'GPS ${telemetry.gpsCount}',
+                ),
               ),
-            ),
-            Expanded(
-              child: _StatusChip(
-                icon: Icons.satellite_alt,
-                label: telemetry == null ? 'GPS --' : 'GPS ${telemetry.gpsCount}',
+              Expanded(
+                child: _StatusChip(
+                  icon: Icons.flight,
+                  label: telemetry == null ? 'Mode --' : telemetry.mode,
+                ),
               ),
-            ),
-            Expanded(
-              child: _StatusChip(
-                icon: Icons.flight,
-                label: telemetry == null ? 'Mode --' : telemetry.mode,
-              ),
-            ),
-            TextButton(
-              style: TextButton.styleFrom(
-                minimumSize: const Size(48, 40),
-                padding: const EdgeInsets.symmetric(horizontal: 10),
-              ),
-              onPressed: () => _openConnectPanel(context),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Text('Connect'),
-                  const SizedBox(width: 6),
-                  Semantics(
-                    label: connected ? 'Connected' : 'Disconnected',
-                    child: Container(
-                      width: 10,
-                      height: 10,
-                      decoration: BoxDecoration(
-                        color: connected
-                            ? statusColors.statusGood
-                            : const Color(0xFF6B7280),
-                        shape: BoxShape.circle,
+              TextButton(
+                style: TextButton.styleFrom(
+                  minimumSize: const Size(0, 24),
+                  padding: const EdgeInsets.symmetric(horizontal: 6),
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  visualDensity: VisualDensity.compact,
+                  textStyle: const TextStyle(fontSize: 12, height: 1),
+                ),
+                onPressed: () => _openConnectPanel(context),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Text('Connect'),
+                    const SizedBox(width: 4),
+                    Semantics(
+                      label: connected ? 'Connected' : 'Disconnected',
+                      child: Container(
+                        width: 8,
+                        height: 8,
+                        decoration: BoxDecoration(
+                          color: connected
+                              ? statusColors.statusGood
+                              : const Color(0xFF6B7280),
+                          shape: BoxShape.circle,
+                        ),
                       ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -92,28 +95,64 @@ class FlightStatusBar extends ConsumerWidget {
   }
 }
 
-class _StatusChip extends StatelessWidget {
-  const _StatusChip({required this.icon, required this.label, this.color});
+class _BatteryReadout extends StatelessWidget {
+  const _BatteryReadout({required this.fraction, required this.color});
 
-  final IconData icon;
-  final String label;
-  final Color? color;
+  final double? fraction;
+  final Color color;
 
   @override
   Widget build(BuildContext context) {
-    final itemColor = color ?? AppTheme.text;
+    final label = fraction == null
+        ? '--'
+        : '${(fraction! * 100).toStringAsFixed(1)}%';
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(Icons.battery_std, size: 14, color: color),
+        const SizedBox(width: 4),
+        Text(
+          label,
+          style: TextStyle(fontSize: 11, height: 1, color: color),
+        ),
+        const SizedBox(width: 6),
+        SizedBox(
+          width: 28,
+          height: 3,
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(2),
+            child: LinearProgressIndicator(
+              value: fraction ?? 0,
+              minHeight: 3,
+              backgroundColor: const Color(0xFF2A3548),
+              color: color,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _StatusChip extends StatelessWidget {
+  const _StatusChip({required this.icon, required this.label});
+
+  final IconData icon;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    const itemColor = AppTheme.text;
     return Row(
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
-        Icon(icon, size: 16, color: itemColor),
-        const SizedBox(width: 6),
+        Icon(icon, size: 14, color: itemColor),
+        const SizedBox(width: 4),
         Flexible(
           child: Text(
             label,
             overflow: TextOverflow.ellipsis,
-            style: Theme.of(context).textTheme.bodySmall?.copyWith(
-              color: itemColor,
-            ),
+            style: TextStyle(fontSize: 11, height: 1.1, color: itemColor),
           ),
         ),
       ],
