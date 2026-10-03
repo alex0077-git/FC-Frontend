@@ -344,6 +344,75 @@ class MissionRepository extends StateNotifier<MissionState> {
     ]);
   }
 
+  /// Slides the zone by [eastMeters] and [northMeters]. Size and shape stay
+  /// the same. Coverage follows on the same timer as the line-angle joystick.
+  void moveObstacle(
+    String id, {
+    required double eastMeters,
+    required double northMeters,
+  }) {
+    if (eastMeters == 0 && northMeters == 0) {
+      return;
+    }
+    final current = _obstacleById(id);
+    final center = current?.center;
+    if (current == null || center == null) {
+      return;
+    }
+    _replaceObstacle(
+      _obstacleAt(current, _shiftByMeters(center, eastMeters, northMeters)),
+    );
+  }
+
+  /// Puts the zone back on an exact center. Used when Cancel undoes a move.
+  void placeObstacle(String id, LatLng center) {
+    final current = _obstacleById(id);
+    final currentCenter = current?.center;
+    if (current == null || currentCenter == null) {
+      return;
+    }
+    if (_sameLatLng(currentCenter, center)) {
+      return;
+    }
+    _replaceObstacle(_obstacleAt(current, center));
+  }
+
+  Obstacle? _obstacleById(String id) {
+    for (final obstacle in state.obstacles) {
+      if (obstacle.id == id) {
+        return obstacle;
+      }
+    }
+    return null;
+  }
+
+  Obstacle _obstacleAt(Obstacle current, LatLng center) {
+    return Obstacle(
+      id: current.id,
+      type: current.type,
+      center: center,
+      radiusMeters: current.radiusMeters,
+      sideMeters: current.sideMeters,
+      finalized: current.finalized,
+    );
+  }
+
+  void _replaceObstacle(Obstacle next) {
+    state = state.copyWith(
+      obstacles: List.unmodifiable([
+        for (final obstacle in state.obstacles)
+          if (obstacle.id == next.id) next else obstacle,
+      ]),
+    );
+    if (state.coverageLines.isEmpty || state.boundaryPoints.length < 3) {
+      return;
+    }
+    scheduleCoverage(
+      spacingMeters: state.spacingMeters,
+      orientationDegrees: state.orientationDegrees,
+    );
+  }
+
   void saveObstacle(String id) {
     final index = state.obstacles.indexWhere((obstacle) => obstacle.id == id);
     if (index == -1) {
@@ -1474,6 +1543,29 @@ List<double> _horizontalCrossings(List<_LocalPoint> polygon, double y) {
     }
   }
   return unique;
+}
+
+const _metersPerDegree = 111320.0;
+
+LatLng _shiftByMeters(LatLng origin, double eastMeters, double northMeters) {
+  final scale = _metersPerDegree * cos(origin.latitude * pi / 180);
+  return LatLng(
+    origin.latitude + northMeters / _metersPerDegree,
+    origin.longitude + eastMeters / scale,
+  );
+}
+
+(double, double) offsetMeters(LatLng origin, LatLng current) {
+  final scale = _metersPerDegree * cos(origin.latitude * pi / 180);
+  return (
+    (current.longitude - origin.longitude) * scale,
+    (current.latitude - origin.latitude) * _metersPerDegree,
+  );
+}
+
+bool _sameLatLng(LatLng a, LatLng b) {
+  return (a.latitude - b.latitude).abs() < 1e-10 &&
+      (a.longitude - b.longitude).abs() < 1e-10;
 }
 
 void _extendCoveragePath({

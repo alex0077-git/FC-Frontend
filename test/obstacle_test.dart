@@ -318,6 +318,20 @@ void main() {
     expect(find.text('Side'), findsNothing);
     expect(find.text('Save'), findsNothing);
 
+    final squareBefore = repository.state.obstacles.single.center!;
+    final moveEast = find.byWidgetPredicate(
+      (widget) => widget is IconButton && widget.tooltip == 'Move east',
+    );
+    await tester.ensureVisible(moveEast);
+    await tester.tap(moveEast);
+    await tester.pump();
+    expect(repository.state.obstacles.single.sideMeters, 11);
+    expect(repository.state.obstacles.single.finalized, isTrue);
+    final squareShift = _xy(repository.state.obstacles.single.center!, squareBefore);
+    expect(squareShift.$1, closeTo(0.5, 0.05));
+    expect(squareShift.$2, closeTo(0, 0.05));
+    expect(find.text('0.5'), findsOneWidget);
+
     repository.addCircleObstacle(const LatLng(12.973, 77.593));
     await tester.pump();
     await tester.ensureVisible(find.text('Circle zone'));
@@ -337,7 +351,192 @@ void main() {
           .radiusMeters,
       11,
     );
+
+    final circle = repository.state.obstacles.firstWhere(
+      (obstacle) => obstacle.id != squareId,
+    );
+    await repository.generateCoverage(spacingMeters: 20, orientationDegrees: 0);
+    await tester.pump();
+    final circleBefore = circle.center!;
+    await tester.ensureVisible(find.text('Position'));
+    await tester.pump();
+    await tester.tap(find.text('Position'));
+    await tester.pump();
+    final moveCircleEast = find.byWidgetPredicate(
+      (widget) => widget is IconButton && widget.tooltip == 'Move east',
+    );
+    await tester.ensureVisible(moveCircleEast);
+    await tester.pump();
+    await tester.tap(moveCircleEast);
+    await tester.pump();
+    final movedCircle = repository.state.obstacles.firstWhere(
+      (obstacle) => obstacle.id != squareId,
+    );
+    expect(movedCircle.radiusMeters, 11);
+    expect(movedCircle.type, ObstacleType.circle);
+    final circleShift = _xy(movedCircle.center!, circleBefore);
+    expect(circleShift.$1, closeTo(0.5, 0.05));
+    expect(circleShift.$2, closeTo(0, 0.05));
+    _expectOutside(repository.state.coveragePaths, movedCircle);
+    expect(find.text('0.5'), findsOneWidget);
+
+    await tester.ensureVisible(find.text('OK'));
+    await tester.pump();
+    await tester.tap(find.text('OK'));
+    await tester.pump();
+    expect(find.text('0.0'), findsNWidgets(2));
+
+    final committed = repository.state.obstacles.firstWhere(
+      (obstacle) => obstacle.id != squareId,
+    ).center!;
+    await tester.ensureVisible(moveCircleEast);
+    await tester.pump();
+    await tester.tap(moveCircleEast);
+    await tester.pump();
+    expect(find.text('0.5'), findsOneWidget);
+    await tester.ensureVisible(find.text('Cancel'));
+    await tester.pump();
+    await tester.tap(find.text('Cancel'));
+    await tester.pump();
+    final restored = repository.state.obstacles.firstWhere(
+      (obstacle) => obstacle.id != squareId,
+    );
+    expect(_samePoint(restored.center!, committed), isTrue);
+    expect(restored.radiusMeters, 11);
+    expect(find.text('Radius'), findsOneWidget);
+    expect(find.text('Position'), findsOneWidget);
+    await tester.pump(const Duration(milliseconds: 100));
   });
+
+  testWidgets('moving an obstacle keeps its size and reroutes coverage around it', (
+    tester,
+  ) async {
+    final repository = MissionRepository();
+    addTearDown(repository.dispose);
+    _addRectangle(repository);
+    final circleId = repository.addCircleObstacle(_at(0, 20));
+    repository.updateObstacleRadius(circleId, 8);
+    await repository.generateCoverage(spacingMeters: 10, orientationDegrees: 0);
+
+    final before = repository.state.obstacles.single.center!;
+    repository.moveObstacle(circleId, eastMeters: 0, northMeters: 12);
+    final circle = repository.state.obstacles.single;
+    expect(circle.radiusMeters, 8);
+    final shift = _xy(circle.center!, before);
+    expect(shift.$1, closeTo(0, 0.05));
+    expect(shift.$2, closeTo(12, 0.05));
+    _expectOutside(repository.state.coveragePaths, circle);
+    expect(_hugsCircle(repository.state.coveragePaths, circle), isTrue);
+    expect(_hugsCenter(repository.state.coveragePaths, before, 8), isFalse);
+
+    await tester.pump(const Duration(milliseconds: 100));
+    repository.placeObstacle(circleId, before);
+    final restored = repository.state.obstacles.single;
+    expect(_samePoint(restored.center!, before), isTrue);
+    expect(restored.radiusMeters, 8);
+    _expectOutside(repository.state.coveragePaths, restored);
+
+    await tester.pump(const Duration(milliseconds: 100));
+    final squareId = repository.addSquareObstacle(_at(-12, 8));
+    repository.updateObstacleSide(squareId, 6);
+    repository.saveObstacle(squareId);
+    final squareBefore = repository.state.obstacles
+        .firstWhere((obstacle) => obstacle.id == squareId)
+        .center!;
+    repository.moveObstacle(squareId, eastMeters: 8, northMeters: 0);
+    final square = repository.state.obstacles.firstWhere(
+      (obstacle) => obstacle.id == squareId,
+    );
+    expect(square.sideMeters, 6);
+    expect(square.finalized, isTrue);
+    final squareShift = _xy(square.center!, squareBefore);
+    expect(squareShift.$1, closeTo(8, 0.05));
+    expect(squareShift.$2, closeTo(0, 0.05));
+    _expectOutside(repository.state.coveragePaths, square);
+    _expectOutside(
+      repository.state.coveragePaths,
+      repository.state.obstacles.firstWhere((obstacle) => obstacle.id == circleId),
+    );
+    await tester.pump(const Duration(milliseconds: 100));
+  });
+
+  testWidgets('rapid obstacle moves refresh coverage on the same timer as the joystick', (
+    tester,
+  ) async {
+    final repository = MissionRepository();
+    addTearDown(repository.dispose);
+    _addRectangle(repository);
+    final id = repository.addCircleObstacle(_at(0, 20));
+    repository.updateObstacleRadius(id, 8);
+    await repository.generateCoverage(spacingMeters: 10, orientationDegrees: 0);
+    repository.moveObstacle(id, eastMeters: 6, northMeters: 0);
+    _expectOutside(repository.state.coveragePaths, repository.state.obstacles.single);
+
+    repository.moveObstacle(id, eastMeters: 6, northMeters: 0);
+    final waiting = repository.state.obstacles.single;
+    final waitingShift = _xy(waiting.center!, _at(0, 20));
+    expect(waitingShift.$1, closeTo(12, 0.05));
+    expect(waiting.radiusMeters, 8);
+    expect(
+      repository.state.coveragePaths.single.points.any(waiting.enters),
+      isTrue,
+    );
+
+    await tester.pump(const Duration(milliseconds: 50));
+    final settled = repository.state.obstacles.single;
+    expect(settled.radiusMeters, 8);
+    _expectOutside(repository.state.coveragePaths, settled);
+    expect(_hugsCircle(repository.state.coveragePaths, settled), isTrue);
+    await tester.pump(const Duration(milliseconds: 100));
+  });
+}
+
+void _expectOutside(List<CoveragePath> paths, Obstacle obstacle) {
+  for (final path in paths) {
+    final points = path.points;
+    for (var index = 0; index < points.length; index++) {
+      expect(obstacle.enters(points[index]), isFalse);
+      if (index == 0) {
+        continue;
+      }
+      final mid = LatLng(
+        (points[index - 1].latitude + points[index].latitude) / 2,
+        (points[index - 1].longitude + points[index].longitude) / 2,
+      );
+      expect(obstacle.enters(mid), isFalse);
+    }
+  }
+}
+
+bool _hugsCircle(List<CoveragePath> paths, Obstacle circle) {
+  final center = circle.center!;
+  final cornerRadius = (circle.radiusMeters! + Obstacle.circleBufferMeters) /
+      cos(pi / Obstacle.circleRouteSides);
+  for (final path in paths) {
+    for (final point in path.points) {
+      final local = _xy(point, center);
+      final distance = sqrt(local.$1 * local.$1 + local.$2 * local.$2);
+      if ((distance - cornerRadius).abs() < 0.2) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+bool _hugsCenter(List<CoveragePath> paths, LatLng center, double radiusMeters) {
+  final cornerRadius =
+      (radiusMeters + Obstacle.circleBufferMeters) / cos(pi / Obstacle.circleRouteSides);
+  for (final path in paths) {
+    for (final point in path.points) {
+      final local = _xy(point, center);
+      final distance = sqrt(local.$1 * local.$1 + local.$2 * local.$2);
+      if ((distance - cornerRadius).abs() < 0.2) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 void _addRectangle(MissionRepository repository) {

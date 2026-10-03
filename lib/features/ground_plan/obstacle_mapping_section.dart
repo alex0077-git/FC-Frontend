@@ -1,5 +1,5 @@
-import 'package:fc_frontend/core/widgets/line_spacing_control.dart';
 import 'package:fc_frontend/data/models/obstacle.dart';
+import 'package:fc_frontend/features/ground_plan/obstacle_adjustment_panel.dart';
 import 'package:flutter/material.dart';
 
 enum ObstacleTool { circle, square }
@@ -19,6 +19,11 @@ class ObstacleMappingSection extends StatelessWidget {
     required this.onSide,
     required this.onSave,
     required this.onRemove,
+    required this.eastOffsetMeters,
+    required this.northOffsetMeters,
+    required this.onNudge,
+    required this.onOk,
+    required this.onCancel,
   });
 
   final bool choosing;
@@ -32,6 +37,11 @@ class ObstacleMappingSection extends StatelessWidget {
   final ValueChanged<double> onSide;
   final VoidCallback onSave;
   final VoidCallback onRemove;
+  final double eastOffsetMeters;
+  final double northOffsetMeters;
+  final void Function(double eastMeters, double northMeters) onNudge;
+  final VoidCallback onOk;
+  final VoidCallback onCancel;
 
   @override
   Widget build(BuildContext context) {
@@ -70,44 +80,6 @@ class ObstacleMappingSection extends StatelessWidget {
             padding: EdgeInsets.symmetric(vertical: 8),
             child: Text('No obstacles yet'),
           ),
-        if (selected != null && selected.type == ObstacleType.circle) ...[
-          const SizedBox(height: 8),
-          LineSpacingControl(
-            title: 'Radius',
-            decreaseTooltip: 'Decrease radius',
-            increaseTooltip: 'Increase radius',
-            spacingMeters: selected.radiusMeters ?? Obstacle.defaultRadiusMeters,
-            lowerMeters: Obstacle.minSizeMeters,
-            upperMeters: Obstacle.maxSizeMeters,
-            onChanged: onRadius,
-          ),
-        ],
-        if (editingSquare) ...[
-          const SizedBox(height: 8),
-          LineSpacingControl(
-            title: 'Side',
-            decreaseTooltip: 'Decrease side',
-            increaseTooltip: 'Increase side',
-            spacingMeters: selected.sideMeters ?? Obstacle.defaultSideMeters,
-            lowerMeters: Obstacle.minSizeMeters,
-            upperMeters: Obstacle.maxSizeMeters,
-            onChanged: onSide,
-          ),
-          const SizedBox(height: 8),
-          FilledButton(
-            style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(40)),
-            onPressed: onSave,
-            child: const Text('Save'),
-          ),
-        ],
-        if (selected != null) ...[
-          const SizedBox(height: 8),
-          OutlinedButton(
-            style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(40)),
-            onPressed: onRemove,
-            child: const Text('Remove zone'),
-          ),
-        ],
         for (final obstacle in obstacles) ...[
           const SizedBox(height: 8),
           OutlinedButton(
@@ -122,6 +94,23 @@ class ObstacleMappingSection extends StatelessWidget {
               obstacle.type == ObstacleType.circle ? 'Circle zone' : 'Square zone',
             ),
           ),
+          if (selected != null && obstacle.id == selected.id)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: ObstacleAdjustmentPanel(
+                key: ValueKey(selected.id),
+                obstacle: selected,
+                eastOffsetMeters: eastOffsetMeters,
+                northOffsetMeters: northOffsetMeters,
+                onRadius: onRadius,
+                onSide: onSide,
+                onSave: editingSquare ? onSave : null,
+                onNudge: onNudge,
+                onOk: onOk,
+                onCancel: onCancel,
+                onRemove: onRemove,
+              ),
+            ),
         ],
       ],
     );

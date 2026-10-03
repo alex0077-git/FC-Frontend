@@ -26,8 +26,10 @@ class LineSpacingControl extends StatelessWidget {
     final atMax = spacingMeters >= upperMeters - 0.001;
     return Column(
       children: [
-        Text(title),
-        const SizedBox(height: 4),
+        if (title.isNotEmpty) ...[
+          Text(title),
+          const SizedBox(height: 4),
+        ],
         Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [

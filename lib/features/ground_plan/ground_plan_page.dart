@@ -63,6 +63,7 @@ class _GroundPlanPageState extends ConsumerState<GroundPlanPage> {
   bool _mappingObstacles = false;
   ObstacleTool? _obstacleTool;
   String? _selectedObstacleId;
+  LatLng? _obstacleMoveOrigin;
   _SidebarSection? _openSection = _SidebarSection.boundary;
 
   @override
@@ -285,11 +286,16 @@ class _GroundPlanPageState extends ConsumerState<GroundPlanPage> {
               selectedId: _selectedObstacleId,
               onCircle: () => _chooseObstacleTool(ObstacleTool.circle),
               onSquare: () => _chooseObstacleTool(ObstacleTool.square),
-              onSelect: (id) => setState(() => _selectedObstacleId = id),
+              onSelect: (id) => _selectObstacle(id, mission),
               onRadius: _setObstacleRadius,
               onSide: _setObstacleSide,
               onSave: _saveSelectedObstacle,
               onRemove: _removeSelectedObstacle,
+              eastOffsetMeters: _obstacleOffset(mission).$1,
+              northOffsetMeters: _obstacleOffset(mission).$2,
+              onNudge: _nudgeSelectedObstacle,
+              onOk: () => _commitObstacleMove(mission),
+              onCancel: _cancelObstacleMove,
             ),
           ],
         ),
@@ -407,6 +413,7 @@ class _GroundPlanPageState extends ConsumerState<GroundPlanPage> {
       _mappingObstacles = true;
       _obstacleTool = tool;
       _selectedObstacleId = null;
+      _obstacleMoveOrigin = null;
     });
   }
 
@@ -414,6 +421,14 @@ class _GroundPlanPageState extends ConsumerState<GroundPlanPage> {
     _mappingObstacles = false;
     _obstacleTool = null;
     _selectedObstacleId = null;
+    _obstacleMoveOrigin = null;
+  }
+
+  void _selectObstacle(String id, MissionState mission) {
+    setState(() {
+      _selectedObstacleId = id;
+      _obstacleMoveOrigin = _centerOf(mission, id);
+    });
   }
 
   void _onObstacleTap(LatLng point) {
@@ -421,22 +436,30 @@ class _GroundPlanPageState extends ConsumerState<GroundPlanPage> {
     final hit = repository.obstacleAt(point);
     if (_obstacleTool == ObstacleTool.circle) {
       if (hit != null) {
-        setState(() => _selectedObstacleId = hit.id);
+        _selectObstacle(hit.id, ref.read(missionRepositoryProvider));
         return;
       }
-      setState(() => _selectedObstacleId = repository.addCircleObstacle(point));
+      final id = repository.addCircleObstacle(point);
+      setState(() {
+        _selectedObstacleId = id;
+        _obstacleMoveOrigin = point;
+      });
       return;
     }
     if (_obstacleTool == ObstacleTool.square) {
       if (hit != null) {
-        setState(() => _selectedObstacleId = hit.id);
+        _selectObstacle(hit.id, ref.read(missionRepositoryProvider));
         return;
       }
-      setState(() => _selectedObstacleId = repository.addSquareObstacle(point));
+      final id = repository.addSquareObstacle(point);
+      setState(() {
+        _selectedObstacleId = id;
+        _obstacleMoveOrigin = point;
+      });
       return;
     }
     if (hit != null) {
-      setState(() => _selectedObstacleId = hit.id);
+      _selectObstacle(hit.id, ref.read(missionRepositoryProvider));
       return;
     }
     _showMessage('Choose Circle or Square first.');
@@ -472,7 +495,58 @@ class _GroundPlanPageState extends ConsumerState<GroundPlanPage> {
       return;
     }
     ref.read(missionRepositoryProvider.notifier).removeObstacle(id);
-    setState(() => _selectedObstacleId = null);
+    setState(() {
+      _selectedObstacleId = null;
+      _obstacleMoveOrigin = null;
+    });
+  }
+
+  void _nudgeSelectedObstacle(double eastMeters, double northMeters) {
+    final id = _selectedObstacleId;
+    if (id == null) {
+      return;
+    }
+    ref.read(missionRepositoryProvider.notifier).moveObstacle(
+          id,
+          eastMeters: eastMeters,
+          northMeters: northMeters,
+        );
+  }
+
+  void _commitObstacleMove(MissionState mission) {
+    final id = _selectedObstacleId;
+    if (id == null) {
+      return;
+    }
+    setState(() => _obstacleMoveOrigin = _centerOf(mission, id));
+  }
+
+  void _cancelObstacleMove() {
+    final id = _selectedObstacleId;
+    final origin = _obstacleMoveOrigin;
+    if (id == null || origin == null) {
+      return;
+    }
+    ref.read(missionRepositoryProvider.notifier).placeObstacle(id, origin);
+  }
+
+  (double, double) _obstacleOffset(MissionState mission) {
+    final id = _selectedObstacleId;
+    final origin = _obstacleMoveOrigin;
+    final center = id == null ? null : _centerOf(mission, id);
+    if (origin == null || center == null) {
+      return (0, 0);
+    }
+    return offsetMeters(origin, center);
+  }
+
+  LatLng? _centerOf(MissionState mission, String id) {
+    for (final obstacle in mission.obstacles) {
+      if (obstacle.id == id) {
+        return obstacle.center;
+      }
+    }
+    return null;
   }
 
   void _placeBoundaryPoint(LatLng point) {
