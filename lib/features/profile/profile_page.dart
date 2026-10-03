@@ -1,3 +1,4 @@
+import 'package:fc_frontend/core/map/map_view.dart';
 import 'package:fc_frontend/core/theme/theme_mode_provider.dart';
 import 'package:fc_frontend/core/widgets/responsive.dart';
 import 'package:flutter/material.dart';
@@ -15,7 +16,6 @@ class ProfilePage extends ConsumerStatefulWidget {
 class _ProfilePageState extends ConsumerState<ProfilePage> {
   final TextEditingController _usernameController = TextEditingController();
   String _units = 'Metric';
-  String _mapStyle = 'Standard';
 
   @override
   void dispose() {
@@ -26,6 +26,7 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
   @override
   Widget build(BuildContext context) {
     final themeMode = ref.watch(themeModeProvider);
+    final mapView = ref.watch(mapViewModeProvider);
     final scheme = Theme.of(context).colorScheme;
 
     final phone = Responsive.isPhone(context);
@@ -92,22 +93,25 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
           },
         ),
         const SizedBox(height: 16),
-        DropdownButtonFormField<String>(
-          initialValue: _mapStyle,
+        DropdownButtonFormField<MapViewMode>(
+          key: ValueKey(mapView),
+          initialValue: mapView,
           decoration: const InputDecoration(
             labelText: 'Map style',
             border: OutlineInputBorder(),
           ),
           items: const [
-            DropdownMenuItem(value: 'Standard', child: Text('Standard')),
-            DropdownMenuItem(value: 'Satellite', child: Text('Satellite')),
-            DropdownMenuItem(value: 'Terrain', child: Text('Terrain')),
+            DropdownMenuItem(value: MapViewMode.street, child: Text('Street')),
+            DropdownMenuItem(
+              value: MapViewMode.satellite,
+              child: Text('Satellite'),
+            ),
           ],
           onChanged: (value) {
             if (value == null) {
               return;
             }
-            setState(() => _mapStyle = value);
+            ref.read(mapViewModeProvider.notifier).setMode(value);
           },
         ),
         const SizedBox(height: 32),

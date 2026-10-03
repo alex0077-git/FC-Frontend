@@ -1,3 +1,4 @@
+import 'package:fc_frontend/core/map/map_view.dart';
 import 'package:fc_frontend/core/theme/app_theme.dart';
 import 'package:fc_frontend/core/widgets/responsive.dart';
 import 'package:fc_frontend/data/models/battery_settings.dart';
@@ -192,20 +193,18 @@ _BatteryAlertLevel? _batteryAlertLevel(double battery, BatterySettings settings)
   return null;
 }
 
-class _FlightMap extends StatelessWidget {
+class _FlightMap extends ConsumerWidget {
   const _FlightMap({required this.telemetry});
 
   final Telemetry? telemetry;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final satellite = ref.watch(mapViewModeProvider) == MapViewMode.satellite;
     return FlutterMap(
       options: const MapOptions(initialCenter: _mapCenter, initialZoom: 17),
       children: [
-        TileLayer(
-          urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-          userAgentPackageName: 'fc_frontend',
-        ),
+        const MapTileLayer(),
         if (telemetry != null)
           MarkerLayer(
             markers: [
@@ -217,17 +216,18 @@ class _FlightMap extends StatelessWidget {
               ),
             ],
           ),
-        const Align(
+        const MapStyleToggle(),
+        Align(
           alignment: Alignment.bottomRight,
           child: ColoredBox(
-            color: Color(0xCC121A2B),
+            color: const Color(0xCC121A2B),
             child: Padding(
-              padding: EdgeInsets.all(4),
+              padding: const EdgeInsets.all(4),
               child: Text(
-                '© OpenStreetMap contributors',
+                satellite ? 'Tiles © Esri' : '© OpenStreetMap contributors',
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: TextStyle(fontSize: 11, color: Colors.white),
+                style: const TextStyle(fontSize: 11, color: Colors.white),
               ),
             ),
           ),

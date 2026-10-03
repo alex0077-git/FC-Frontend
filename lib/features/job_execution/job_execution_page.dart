@@ -1,4 +1,5 @@
-﻿import 'package:fc_frontend/core/theme/app_theme.dart';
+﻿import 'package:fc_frontend/core/map/map_view.dart';
+import 'package:fc_frontend/core/theme/app_theme.dart';
 import 'package:fc_frontend/core/widgets/coverage_lines.dart';
 import 'package:fc_frontend/core/widgets/obstacle_map_layers.dart';
 import 'package:fc_frontend/core/widgets/joystick_control.dart';
@@ -191,10 +192,7 @@ class _JobMap extends StatelessWidget {
         ),
       ),
       children: [
-        TileLayer(
-          urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-          userAgentPackageName: 'fc_frontend',
-        ),
+        const MapTileLayer(),
         if (boundary.length >= 3)
           PolygonLayer(
             polygons: [
@@ -217,6 +215,7 @@ class _JobMap extends StatelessWidget {
             cullingMargin: null,
           ),
         ...obstacleMapLayers(obstacles: mission.obstacles),
+        const MapStyleToggle(),
         if (drone != null)
           MarkerLayer(
             markers: [

@@ -1,4 +1,5 @@
 import 'package:fc_frontend/core/geometry/boundary_split.dart';
+import 'package:fc_frontend/core/map/map_view.dart';
 import 'package:fc_frontend/core/theme/app_theme.dart';
 import 'package:fc_frontend/core/widgets/coverage_lines.dart';
 import 'package:fc_frontend/core/widgets/line_spacing_control.dart';
@@ -891,10 +892,7 @@ class _PlanMapState extends State<_PlanMap> {
             ),
           ),
           children: [
-            TileLayer(
-              urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-              userAgentPackageName: 'fc_frontend',
-            ),
+            const MapTileLayer(),
             if (points.length >= 3)
               PolygonLayer(
                 polygons: [
@@ -1001,6 +999,7 @@ class _PlanMapState extends State<_PlanMap> {
             ),
           ],
         ),
+        const MapStyleToggle(),
         Positioned(
           left: 12,
           top: 12,
