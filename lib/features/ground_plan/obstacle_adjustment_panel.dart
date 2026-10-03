@@ -131,7 +131,7 @@ class _ObstacleAdjustmentPanelState extends State<ObstacleAdjustmentPanel> {
             ),
             const SizedBox(height: 8),
             FilledButton(
-              style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(40)),
+              style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(44)),
               onPressed: widget.onSave,
               child: const Text('Save'),
             ),
@@ -147,7 +147,7 @@ class _ObstacleAdjustmentPanelState extends State<ObstacleAdjustmentPanel> {
           children: [
             Expanded(
               child: OutlinedButton(
-                style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(40)),
+                style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(44)),
                 onPressed: widget.onCancel,
                 child: const Text('Cancel'),
               ),
@@ -156,7 +156,7 @@ class _ObstacleAdjustmentPanelState extends State<ObstacleAdjustmentPanel> {
             Expanded(
               child: FilledButton(
                 style: FilledButton.styleFrom(
-                  minimumSize: const Size.fromHeight(40),
+                  minimumSize: const Size.fromHeight(44),
                   backgroundColor: _activeTabColor,
                   foregroundColor: Colors.black,
                 ),
@@ -188,7 +188,7 @@ class _TabButton extends StatelessWidget {
     if (selected) {
       return FilledButton(
         style: FilledButton.styleFrom(
-          minimumSize: const Size.fromHeight(40),
+          minimumSize: const Size.fromHeight(44),
           backgroundColor: _activeTabColor,
           foregroundColor: Colors.black,
         ),
@@ -197,7 +197,7 @@ class _TabButton extends StatelessWidget {
       );
     }
     return OutlinedButton(
-      style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(40)),
+      style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(44)),
       onPressed: onPressed,
       child: child,
     );

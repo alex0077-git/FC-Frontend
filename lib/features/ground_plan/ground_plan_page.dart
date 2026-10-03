@@ -113,7 +113,7 @@ class _GroundPlanPageState extends ConsumerState<GroundPlanPage> {
             builder: (context, constraints) {
               final sheetMax = openSection == null
                   ? 0.0
-                  : (constraints.maxHeight * 0.42).clamp(120.0, 380.0);
+                  : _groundPlanSheetCap(constraints.maxHeight);
               final controlsMax = (constraints.maxHeight - sheetMax - 16)
                   .clamp(96.0, 440.0);
               final controlsWidth = (constraints.maxWidth - 168).clamp(220.0, 360.0);
@@ -126,6 +126,7 @@ class _GroundPlanPageState extends ConsumerState<GroundPlanPage> {
                       right: 0,
                       bottom: 0,
                       child: _SectionPanel(
+                        key: ValueKey(openSection),
                         title: _sectionTitle(openSection),
                         maxHeight: sheetMax,
                         onClose: () {
@@ -253,7 +254,7 @@ class _GroundPlanPageState extends ConsumerState<GroundPlanPage> {
               onSelectSplitA: () => _selectSplit(0),
               onSelectSplitB: () => _selectSplit(1),
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 8),
             _PointPairSection(
               pointA: _pointA,
               pointB: _pointB,
@@ -270,7 +271,7 @@ class _GroundPlanPageState extends ConsumerState<GroundPlanPage> {
           children: [
             OutlinedButton(
               style: OutlinedButton.styleFrom(
-                minimumSize: const Size.fromHeight(40),
+                minimumSize: const Size.fromHeight(44),
                 backgroundColor: _mappingObstacles
                     ? Colors.red.withValues(alpha: 0.12)
                     : null,
@@ -1116,8 +1117,18 @@ class _IndexMarker extends StatelessWidget {
   }
 }
 
-class _SectionPanel extends StatelessWidget {
+/// Tallest a Ground Plan sheet may be.
+///
+/// A normal window stays near a third of the page. A short phone may use up
+/// to 45% so the tools still fit, without ever covering most of the map.
+double _groundPlanSheetCap(double pageHeight) {
+  final shortScreen = pageHeight < 480;
+  return pageHeight * (shortScreen ? 0.45 : 0.34);
+}
+
+class _SectionPanel extends StatefulWidget {
   const _SectionPanel({
+    super.key,
     required this.title,
     required this.maxHeight,
     required this.onClose,
@@ -1130,17 +1141,132 @@ class _SectionPanel extends StatelessWidget {
   final Widget child;
 
   @override
+  State<_SectionPanel> createState() => _SectionPanelState();
+}
+
+class _SectionPanelState extends State<_SectionPanel> {
+  static const _headerHeight = 52.0;
+  final GlobalKey _contentKey = GlobalKey();
+  double _drag = 0;
+  double? _bodyHeight;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback(_fitBodyToContent);
+  }
+
+  @override
+  void didUpdateWidget(_SectionPanel oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    WidgetsBinding.instance.addPostFrameCallback(_fitBodyToContent);
+  }
+
+  double get _contentCap {
+    return (widget.maxHeight - _headerHeight).clamp(48.0, widget.maxHeight);
+  }
+
+  double get _visualHeight => _headerHeight + (_bodyHeight ?? _contentCap);
+
+  /// Shrinks the sheet to its contents, and never past the cap.
+  /// Extra content stays in the scroll view instead of making the sheet taller.
+  void _fitBodyToContent(_) {
+    final box = _contentKey.currentContext?.findRenderObject() as RenderBox?;
+    if (!mounted || box == null || !box.hasSize) {
+      return;
+    }
+    final next = box.size.height.clamp(0.0, _contentCap);
+    if (_bodyHeight != null && (next - _bodyHeight!).abs() < 0.5) {
+      return;
+    }
+    setState(() => _bodyHeight = next);
+  }
+
+  void _onDragUpdate(double dy) {
+    setState(() {
+      _drag = (_drag + dy).clamp(0.0, _visualHeight);
+    });
+  }
+
+  void _onDragEnd(double velocity) {
+    final pulledFarEnough = _drag > _visualHeight * 0.28;
+    if (pulledFarEnough || velocity > 500) {
+      widget.onClose();
+      return;
+    }
+    setState(() => _drag = 0);
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return Material(
-      color: AppTheme.surface,
-      elevation: 8,
-      clipBehavior: Clip.antiAlias,
-      borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
+    return Transform.translate(
+      offset: Offset(0, _drag),
       child: ConstrainedBox(
-        constraints: BoxConstraints(maxHeight: maxHeight),
+        key: const Key('ground-plan-sheet'),
+        constraints: BoxConstraints(maxHeight: widget.maxHeight),
+        child: Material(
+          color: AppTheme.surface,
+          elevation: 8,
+          clipBehavior: Clip.antiAlias,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _SheetHeader(
+                title: widget.title,
+                onClose: widget.onClose,
+                onDragUpdate: _onDragUpdate,
+                onDragEnd: _onDragEnd,
+              ),
+              SizedBox(
+                height: _bodyHeight ?? _contentCap,
+                child: SingleChildScrollView(
+                  primary: false,
+                  child: KeyedSubtree(
+                    key: _contentKey,
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+                      child: DefaultTextStyle.merge(
+                        style: const TextStyle(fontSize: 13, height: 1.25),
+                        child: widget.child,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _SheetHeader extends StatelessWidget {
+  const _SheetHeader({
+    required this.title,
+    required this.onClose,
+    required this.onDragUpdate,
+    required this.onDragEnd,
+  });
+
+  final String title;
+  final VoidCallback onClose;
+  final ValueChanged<double> onDragUpdate;
+  final ValueChanged<double> onDragEnd;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      key: const Key('ground-plan-sheet-handle'),
+      behavior: HitTestBehavior.opaque,
+      onVerticalDragUpdate: (details) => onDragUpdate(details.delta.dy),
+      onVerticalDragEnd: (details) => onDragEnd(details.primaryVelocity ?? 0),
+      child: SizedBox(
+        height: _SectionPanelState._headerHeight,
         child: Column(
           children: [
-            const SizedBox(height: 8),
+            const SizedBox(height: 6),
             Container(
               width: 36,
               height: 4,
@@ -1149,26 +1275,32 @@ class _SectionPanel extends StatelessWidget {
                 borderRadius: BorderRadius.circular(2),
               ),
             ),
-            SizedBox(
-              height: 40,
+            Expanded(
               child: Row(
                 children: [
-                  const SizedBox(width: 16),
+                  const SizedBox(width: 12),
                   Expanded(
-                    child: Text(title, style: Theme.of(context).textTheme.titleSmall),
+                    child: Text(
+                      title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
                   ),
                   IconButton(
                     tooltip: 'Close',
                     onPressed: onClose,
-                    icon: const Icon(Icons.close),
+                    icon: const Icon(Icons.close, size: 20),
+                    style: IconButton.styleFrom(
+                      minimumSize: const Size(44, 44),
+                      padding: EdgeInsets.zero,
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
                   ),
                 ],
-              ),
-            ),
-            Expanded(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-                child: child,
               ),
             ),
           ],
@@ -1296,7 +1428,7 @@ class _FieldSplitControls extends StatelessWidget {
         ],
         OutlinedButton(
           style: OutlinedButton.styleFrom(
-            minimumSize: const Size.fromHeight(40),
+            minimumSize: const Size.fromHeight(44),
           ),
           onPressed: onSplit,
           child: Text(splitting ? 'Cancel' : 'Split'),
@@ -1305,7 +1437,7 @@ class _FieldSplitControls extends StatelessWidget {
           const SizedBox(height: 8),
           OutlinedButton(
             style: OutlinedButton.styleFrom(
-              minimumSize: const Size.fromHeight(40),
+              minimumSize: const Size.fromHeight(44),
             ),
             onPressed: onUndoSplit,
             child: const FittedBox(
@@ -1359,10 +1491,9 @@ class _HistoryButton extends StatelessWidget {
     return IconButton(
       tooltip: tooltip,
       onPressed: onPressed,
-      icon: Icon(icon, size: 18),
-      visualDensity: VisualDensity.compact,
+      icon: Icon(icon, size: 20),
       padding: EdgeInsets.zero,
-      constraints: const BoxConstraints.tightFor(width: 36, height: 40),
+      constraints: const BoxConstraints.tightFor(width: 44, height: 44),
     );
   }
 }
@@ -1497,7 +1628,7 @@ class _WaypointList extends StatelessWidget {
           )
         else
           SizedBox(
-            height: 220,
+            height: 128,
             child: ListView.builder(
               primary: false,
               itemCount: waypoints.length,

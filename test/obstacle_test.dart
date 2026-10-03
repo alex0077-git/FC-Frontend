@@ -295,6 +295,7 @@ void main() {
     expect(find.text('Square'), findsOneWidget);
     expect(find.text('Polygon'), findsNothing);
 
+    await tester.ensureVisible(find.text('Square'));
     await tester.tap(find.text('Square'));
     await tester.pump();
     final squareId = repository.addSquareObstacle(const LatLng(12.972, 77.592));

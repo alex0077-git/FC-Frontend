@@ -1,6 +1,7 @@
 import 'package:fc_frontend/core/router/app_router.dart';
 import 'package:fc_frontend/core/widgets/ground_plan_bar.dart';
 import 'package:fc_frontend/data/repositories/settings_repository.dart';
+import 'package:fc_frontend/features/ground_plan/ground_plan_page.dart';
 import 'package:fc_frontend/main.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -25,6 +26,7 @@ void main() {
     appRouter.go(route);
     await tester.pumpWidget(
       ProviderScope(
+        key: UniqueKey(),
         overrides: [sharedPreferencesProvider.overrideWithValue(preferences)],
         child: const FcApp(),
       ),
@@ -86,6 +88,17 @@ void main() {
       await tester.pump();
       expect(find.text('Reset'), findsOneWidget);
       expect(find.text('Add Obstacle'), findsNothing);
+      _expectSheetWithinCap(tester);
+
+      await tester.drag(
+        find.byKey(const Key('ground-plan-sheet-handle')),
+        const Offset(0, 160),
+      );
+      await tester.pump();
+      expect(find.text('Reset'), findsNothing);
+
+      await tester.tap(barText('Boundaries'));
+      await tester.pump();
 
       await tester.tap(barText('Obstacles'));
       await tester.pump();
@@ -96,6 +109,41 @@ void main() {
       await tester.pump();
       expect(find.text('Add Obstacle'), findsNothing);
       expect(find.text('Call for Job'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    }
+  });
+
+  testWidgets('every ground plan sheet stays under the compact cap', (tester) async {
+    const sections = ['Boundaries', 'Split', 'Obstacles', 'Waypoints', 'History'];
+    for (final size in [const Size(1200, 800), const Size(667, 375)]) {
+      await pumpRoute(tester, size, '/ground-plan');
+      final pageHeight = tester.getSize(find.byType(GroundPlanPage)).height;
+      final cap = pageHeight * (pageHeight < 480 ? 0.45 : 0.34);
+
+      for (final label in sections) {
+        await tester.tap(barText(label));
+        await tester.pump();
+        final sheetFinder = find.byKey(const Key('ground-plan-sheet'));
+        expect(sheetFinder, findsOneWidget, reason: '$label sheet at $size');
+        final sheetHeight = tester.getSize(sheetFinder).height;
+        expect(sheetHeight, lessThanOrEqualTo(cap + 1), reason: '$label at $size');
+        expect(sheetHeight, lessThan(pageHeight * 0.5), reason: '$label at $size');
+      }
+
+      final scrollable = find.descendant(
+        of: find.byKey(const Key('ground-plan-sheet')),
+        matching: find.byType(Scrollable),
+      );
+      expect(scrollable, findsOneWidget);
+      expect(tester.state<ScrollableState>(scrollable).position.maxScrollExtent, greaterThan(0));
+
+      if (cap > 180) {
+        await tester.tap(barText('Boundaries'));
+        await tester.pump();
+        await tester.pump();
+        final sheetHeight = tester.getSize(find.byKey(const Key('ground-plan-sheet'))).height;
+        expect(sheetHeight, lessThan(cap * 0.7));
+      }
       expect(tester.takeException(), isNull);
     }
   });
@@ -132,6 +180,14 @@ void main() {
     expect(_topIcon('Settings'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
+}
+
+void _expectSheetWithinCap(WidgetTester tester) {
+  final pageHeight = tester.getSize(find.byType(GroundPlanPage)).height;
+  final cap = pageHeight * (pageHeight < 480 ? 0.45 : 0.34);
+  final sheetHeight = tester.getSize(find.byKey(const Key('ground-plan-sheet'))).height;
+  expect(sheetHeight, lessThanOrEqualTo(cap + 1));
+  expect(sheetHeight, lessThan(pageHeight * 0.5));
 }
 
 Finder _topIcon(String tooltip) {

@@ -84,7 +84,7 @@ class ObstacleMappingSection extends StatelessWidget {
           const SizedBox(height: 8),
           OutlinedButton(
             style: OutlinedButton.styleFrom(
-              minimumSize: const Size.fromHeight(40),
+              minimumSize: const Size.fromHeight(44),
               backgroundColor: obstacle.id == selectedId
                   ? Colors.red.withValues(alpha: 0.12)
                   : null,
@@ -151,7 +151,7 @@ class _ToolButton extends StatelessWidget {
   Widget build(BuildContext context) {
     return OutlinedButton(
       style: OutlinedButton.styleFrom(
-        minimumSize: const Size.fromHeight(40),
+        minimumSize: const Size.fromHeight(44),
         backgroundColor: selected ? Colors.red.withValues(alpha: 0.12) : null,
       ),
       onPressed: onPressed,
