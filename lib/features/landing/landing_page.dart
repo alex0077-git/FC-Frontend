@@ -4,6 +4,8 @@ import 'package:go_router/go_router.dart';
 
 const _heroAsset = 'assets/images/fuselage_hero.jpeg';
 const _logoAsset = 'assets/images/fuselage_logo.jpeg';
+const _buttonSize = Size(220, 56);
+const _buttonTextStyle = TextStyle(fontSize: 20, fontWeight: FontWeight.w600);
 
 class LandingPage extends StatelessWidget {
   const LandingPage({super.key});
@@ -69,16 +71,30 @@ class LandingPage extends StatelessWidget {
                       style: Theme.of(context).textTheme.bodyMedium,
                     ),
                     const SizedBox(height: 40),
-                    FilledButton(
-                      onPressed: () => context.go('/map'),
-                      style: FilledButton.styleFrom(
-                        minimumSize: const Size(220, 56),
-                        textStyle: const TextStyle(
-                          fontSize: 20,
-                          fontWeight: FontWeight.w600,
+                    Wrap(
+                      alignment: WrapAlignment.center,
+                      spacing: 16,
+                      runSpacing: 12,
+                      children: [
+                        FilledButton(
+                          onPressed: () => context.go('/map'),
+                          style: FilledButton.styleFrom(
+                            minimumSize: _buttonSize,
+                            textStyle: _buttonTextStyle,
+                          ),
+                          child: const Text('Start'),
                         ),
-                      ),
-                      child: const Text('Start'),
+                        OutlinedButton(
+                          onPressed: () => context.go('/ground-plan'),
+                          style: OutlinedButton.styleFrom(
+                            minimumSize: _buttonSize,
+                            foregroundColor: AppTheme.text,
+                            side: const BorderSide(color: AppTheme.primary),
+                            textStyle: _buttonTextStyle,
+                          ),
+                          child: const Text('Ground Plan'),
+                        ),
+                      ],
                     ),
                   ],
                 ),
