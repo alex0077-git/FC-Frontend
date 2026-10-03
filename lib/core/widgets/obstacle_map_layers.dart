@@ -32,6 +32,22 @@ List<Widget> obstacleMapLayers({
             ),
           ),
         ),
+    for (final obstacle in obstacles)
+      if (obstacle.type == ObstacleType.square)
+        for (final corner in obstacle.routeCorners)
+          Marker(
+            point: corner,
+            width: 10,
+            height: 10,
+            child: const IgnorePointer(
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  color: Colors.red,
+                  shape: BoxShape.circle,
+                ),
+              ),
+            ),
+          ),
   ];
 
   return [

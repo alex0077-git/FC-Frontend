@@ -19,6 +19,7 @@ class MissionState {
   const MissionState({
     this.boundaryPoints = const [],
     this.coverageLines = const [],
+    this.coveragePaths = const [],
     this.waypoints = const [],
     this.savedMissions = const [],
     this.spacingMeters = 1,
@@ -34,6 +35,10 @@ class MissionState {
 
   final List<BoundaryPoint> boundaryPoints;
   final List<CoverageLine> coverageLines;
+
+  /// The lawnmower route in order. Each pass is joined to the next by the
+  /// short turn at the side where the previous pass ended.
+  final List<CoveragePath> coveragePaths;
   final List<Waypoint> waypoints;
   final List<Mission> savedMissions;
   final double spacingMeters;
@@ -58,6 +63,7 @@ class MissionState {
   MissionState copyWith({
     List<BoundaryPoint>? boundaryPoints,
     List<CoverageLine>? coverageLines,
+    List<CoveragePath>? coveragePaths,
     List<Waypoint>? waypoints,
     List<Mission>? savedMissions,
     double? spacingMeters,
@@ -73,6 +79,7 @@ class MissionState {
     return MissionState(
       boundaryPoints: boundaryPoints ?? this.boundaryPoints,
       coverageLines: coverageLines ?? this.coverageLines,
+      coveragePaths: coveragePaths ?? this.coveragePaths,
       waypoints: waypoints ?? this.waypoints,
       savedMissions: savedMissions ?? this.savedMissions,
       spacingMeters: spacingMeters ?? this.spacingMeters,
@@ -91,7 +98,8 @@ class MissionState {
 }
 
 class MissionRepository extends StateNotifier<MissionState> {
-  MissionRepository() : super(const MissionState());
+  MissionRepository({MissionState initialState = const MissionState()})
+      : super(initialState);
 
   int _sequence = 0;
   Timer? _coverageTimer;
@@ -240,6 +248,7 @@ class MissionRepository extends StateNotifier<MissionState> {
     state = state.copyWith(
       boundaryPoints: const [],
       coverageLines: const [],
+      coveragePaths: const [],
       waypoints: const [],
       undoHistory: const [],
       redoHistory: const [],
@@ -381,6 +390,17 @@ class MissionRepository extends StateNotifier<MissionState> {
     return false;
   }
 
+  /// True when a flight-path point is through the red fill. A point that only
+  /// touches the painted edge is allowed.
+  bool _pathEntersObstacle(LatLng point) {
+    for (final obstacle in state.obstacles) {
+      if (obstacle.enters(point)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   Obstacle? obstacleAt(LatLng point) {
     for (final obstacle in state.obstacles.reversed) {
       if (obstacle.contains(point)) {
@@ -472,6 +492,7 @@ class MissionRepository extends StateNotifier<MissionState> {
       redoHistory: const [],
       splits: const [],
       coverageLines: clearDerived ? const [] : state.coverageLines,
+      coveragePaths: clearDerived ? const [] : state.coveragePaths,
       waypoints: clearDerived ? const [] : state.waypoints,
       coverageBlockedByObstacle: clearDerived
           ? false
@@ -559,9 +580,9 @@ class MissionRepository extends StateNotifier<MissionState> {
     final lines = <List<double>>[];
     final sectionIndexes = <int>[];
     final routeBreaks = <bool>[];
-    final waypointLatitudes = <double>[];
-    final waypointLongitudes = <double>[];
-    final waypointSections = <int>[];
+    final paths = <List<LatLng>>[];
+    final pathSections = <int>[];
+    final loopedObstacles = <String>{};
     var blockedByObstacle = false;
     for (var sectionIndex = 0; sectionIndex < sections.length; sectionIndex++) {
       final section = sections[sectionIndex];
@@ -592,38 +613,91 @@ class MissionRepository extends StateNotifier<MissionState> {
         }
         for (var pieceIndex = 0; pieceIndex < pieces.length; pieceIndex++) {
           final piece = pieces[pieceIndex];
-          var startsRoute = breakNext || pieceIndex > 0;
-          if (!startsRoute &&
-              previousEnd != null &&
-              _piecesOutsideObstacles(previousEnd, piece.$1).length != 1) {
-            startsRoute = true;
+          var pieceStart = piece.$1;
+          if (pieceIndex > 0) {
+            final resume = _spliceDetour(
+              from: pieces[pieceIndex - 1].$2,
+              to: piece.$1,
+              section: section,
+              sectionIndex: sectionIndex,
+              lines: lines,
+              paths: paths,
+              pathSections: pathSections,
+              loopedObstacles: loopedObstacles,
+            );
+            if (_joinsAtStart(piece.$1, piece.$2, resume)) {
+              pieceStart = resume;
+            }
+          } else if (!breakNext && previousEnd != null) {
+            final link = _piecesOutsideObstacles(previousEnd, piece.$1);
+            if (link.length != 1) {
+              final resume = _bridgeLink(
+                from: previousEnd,
+                to: piece.$1,
+                link: link,
+                section: section,
+                sectionIndex: sectionIndex,
+                lines: lines,
+                paths: paths,
+                pathSections: pathSections,
+                loopedObstacles: loopedObstacles,
+              );
+              if (_joinsAtStart(piece.$1, piece.$2, resume)) {
+                pieceStart = resume;
+              }
+            }
           }
+          final startsRoute = breakNext && pieceIndex == 0;
           lines.add([
-            piece.$1.latitude,
-            piece.$1.longitude,
+            pieceStart.latitude,
+            pieceStart.longitude,
             piece.$2.latitude,
             piece.$2.longitude,
           ]);
           sectionIndexes.add(sectionIndex);
           routeBreaks.add(startsRoute);
-          _appendWaypoints(
-            piece.$1,
-            piece.$2,
-            waypointLatitudes,
-            waypointLongitudes,
-            waypointSections,
-            sectionIndex,
-            isPointInsideAnyObstacle,
+          _extendCoveragePath(
+            paths: paths,
+            pathSections: pathSections,
+            start: pieceStart,
+            end: piece.$2,
+            sectionIndex: sectionIndex,
+            startsRoute: startsRoute,
           );
           breakNext = false;
           previousEnd = piece.$2;
         }
       }
     }
+    final waypointLatitudes = <double>[];
+    final waypointLongitudes = <double>[];
+    final waypointSections = <int>[];
+    for (var pathIndex = 0; pathIndex < paths.length; pathIndex++) {
+      final path = paths[pathIndex];
+      for (var pointIndex = 0; pointIndex + 1 < path.length; pointIndex++) {
+        _appendWaypoints(
+          path[pointIndex],
+          path[pointIndex + 1],
+          waypointLatitudes,
+          waypointLongitudes,
+          waypointSections,
+          pathSections[pathIndex],
+          _pathEntersObstacle,
+          includeStart: pointIndex == 0,
+        );
+      }
+    }
     _publishCoverage(
       sample,
       _CoverageGeometry(
         lines: lines,
+        paths: [
+          for (var index = 0; index < paths.length; index++)
+            CoveragePath(
+              points: List.unmodifiable(paths[index]),
+              sectionIndex: pathSections[index],
+            ),
+        ],
         waypointLatitudes: waypointLatitudes,
         waypointLongitudes: waypointLongitudes,
         waypointSections: waypointSections,
@@ -634,9 +708,206 @@ class MissionRepository extends StateNotifier<MissionState> {
     );
   }
 
-  /// Keeps every part of a pass that is outside every obstacle. A circle and a
-  /// square use the same rule: [Obstacle.outsidePieces] drops a stretch only
-  /// when its midpoint is inside that shape.
+  LatLng _spliceDetour({
+    required LatLng from,
+    required LatLng to,
+    required List<LatLng> section,
+    required int sectionIndex,
+    required List<List<double>> lines,
+    required List<List<LatLng>> paths,
+    required List<int> pathSections,
+    required Set<String> loopedObstacles,
+  }) {
+    final blocker = _obstacleBetween(from, to);
+    final bend = blocker?.routeAround(
+          from,
+          to,
+          insideField: (point) => boundaryContains(section, point),
+        ) ??
+        [from, to];
+    final route = _outlineThenBend(
+      blocker: blocker,
+      bend: bend,
+      section: section,
+      loopedObstacles: loopedObstacles,
+    );
+    if (route.length >= 2) {
+      _pullEndBack(lines, paths, route.first);
+    }
+    for (var index = 0; index < route.length - 1; index++) {
+      _extendCoveragePath(
+        paths: paths,
+        pathSections: pathSections,
+        start: route[index],
+        end: route[index + 1],
+        sectionIndex: sectionIndex,
+        startsRoute: false,
+      );
+    }
+    return route.last;
+  }
+
+  /// The first time a pass meets an obstacle, draw that obstacle's whole
+  /// outline, then continue along the short side to the other end of the pass.
+  List<LatLng> _outlineThenBend({
+    required Obstacle? blocker,
+    required List<LatLng> bend,
+    required List<LatLng> section,
+    required Set<String> loopedObstacles,
+  }) {
+    if (blocker == null ||
+        blocker.type == ObstacleType.circle ||
+        bend.length < 3 ||
+        !loopedObstacles.add(blocker.id)) {
+      return bend;
+    }
+    final loop = blocker.routeLoop(bend.first);
+    if (loop.length < 4 || !loop.every((point) => boundaryContains(section, point))) {
+      loopedObstacles.remove(blocker.id);
+      return bend;
+    }
+    return [...loop, ...bend.skip(1)];
+  }
+
+  /// Draws the straight parts of a pass-to-pass link, and bends only the
+  /// stretch that actually enters a no-fly zone.
+  LatLng _bridgeLink({
+    required LatLng from,
+    required LatLng to,
+    required List<(LatLng, LatLng)> link,
+    required List<LatLng> section,
+    required int sectionIndex,
+    required List<List<double>> lines,
+    required List<List<LatLng>> paths,
+    required List<int> pathSections,
+    required Set<String> loopedObstacles,
+  }) {
+    if (link.isEmpty) {
+      return _spliceDetour(
+        from: from,
+        to: to,
+        section: section,
+        sectionIndex: sectionIndex,
+        lines: lines,
+        paths: paths,
+        pathSections: pathSections,
+        loopedObstacles: loopedObstacles,
+      );
+    }
+    const distance = Distance();
+    var cursor = from;
+    for (final part in link) {
+      var partStart = part.$1;
+      if (distance.as(LengthUnit.Meter, cursor, part.$1) > 0.2) {
+        final resume = _spliceDetour(
+          from: cursor,
+          to: part.$1,
+          section: section,
+          sectionIndex: sectionIndex,
+          lines: lines,
+          paths: paths,
+          pathSections: pathSections,
+          loopedObstacles: loopedObstacles,
+        );
+        if (_joinsAtStart(part.$1, part.$2, resume)) {
+          partStart = resume;
+        }
+      }
+      _extendCoveragePath(
+        paths: paths,
+        pathSections: pathSections,
+        start: partStart,
+        end: part.$2,
+        sectionIndex: sectionIndex,
+        startsRoute: false,
+      );
+      cursor = part.$2;
+    }
+    return cursor;
+  }
+
+  void _pullEndBack(
+    List<List<double>> lines,
+    List<List<LatLng>> paths,
+    LatLng point,
+  ) {
+    if (lines.isNotEmpty) {
+      final line = lines.last;
+      final start = LatLng(line[0], line[1]);
+      final end = LatLng(line[2], line[3]);
+      if (_joinsAtEnd(start, end, point)) {
+        line[2] = point.latitude;
+        line[3] = point.longitude;
+      }
+    }
+    if (paths.isNotEmpty && paths.last.length >= 2) {
+      final path = paths.last;
+      if (_joinsAtEnd(path[path.length - 2], path.last, point)) {
+        path[path.length - 1] = point;
+      }
+    }
+  }
+
+  bool _joinsAtEnd(LatLng start, LatLng end, LatLng point) {
+    return _onSegment(start, end, point) || _justPastEnd(start, end, point);
+  }
+
+  bool _joinsAtStart(LatLng start, LatLng end, LatLng point) {
+    return _onSegment(start, end, point) || _justBeforeStart(start, end, point);
+  }
+
+  bool _justPastEnd(LatLng start, LatLng end, LatLng point) {
+    const distance = Distance();
+    final span = distance.as(LengthUnit.Meter, start, end);
+    final toEnd = distance.as(LengthUnit.Meter, end, point);
+    final toStart = distance.as(LengthUnit.Meter, start, point);
+    if (span < 1e-6 || toEnd > 1 || toEnd + 0.05 >= toStart) {
+      return false;
+    }
+    return (toStart - (span + toEnd)).abs() <= 0.25;
+  }
+
+  bool _justBeforeStart(LatLng start, LatLng end, LatLng point) {
+    const distance = Distance();
+    final span = distance.as(LengthUnit.Meter, start, end);
+    final toStart = distance.as(LengthUnit.Meter, start, point);
+    final toEnd = distance.as(LengthUnit.Meter, end, point);
+    if (span < 1e-6 || toStart > 1 || toStart + 0.05 >= toEnd) {
+      return false;
+    }
+    return (toEnd - (span + toStart)).abs() <= 0.25;
+  }
+
+  bool _onSegment(LatLng start, LatLng end, LatLng point) {
+    const distance = Distance();
+    final span = distance.as(LengthUnit.Meter, start, end);
+    if (span < 1e-6) {
+      return false;
+    }
+    final along = distance.as(LengthUnit.Meter, start, point);
+    final rest = distance.as(LengthUnit.Meter, point, end);
+    return (along + rest - span).abs() <= 0.15 && along <= span + 0.05;
+  }
+
+  Obstacle? _obstacleBetween(LatLng from, LatLng to) {
+    for (var step = 1; step < 8; step++) {
+      final t = step / 8;
+      final point = LatLng(
+        from.latitude + (to.latitude - from.latitude) * t,
+        from.longitude + (to.longitude - from.longitude) * t,
+      );
+      for (final obstacle in state.obstacles) {
+        if (obstacle.contains(point)) {
+          return obstacle;
+        }
+      }
+    }
+    return null;
+  }
+
+  /// Keeps every part of a pass that is outside every obstacle's flight ring.
+  /// A dropped stretch is the part whose midpoint is inside that ring. The
+  /// kept ends are the exact points where the path meets the ring.
   List<(LatLng, LatLng)> _piecesOutsideObstacles(LatLng start, LatLng end) {
     var pieces = <(LatLng, LatLng)>[(start, end)];
     for (final obstacle in state.obstacles) {
@@ -743,7 +1014,7 @@ class MissionRepository extends StateNotifier<MissionState> {
         geometry.waypointLatitudes[index],
         geometry.waypointLongitudes[index],
       );
-      if (isPointInsideAnyObstacle(point)) {
+      if (_pathEntersObstacle(point)) {
         blocked = true;
         continue;
       }
@@ -763,6 +1034,7 @@ class MissionRepository extends StateNotifier<MissionState> {
     }
     state = state.copyWith(
       coverageLines: List.unmodifiable(lines),
+      coveragePaths: List.unmodifiable(geometry.paths),
       waypoints: List.unmodifiable(waypoints),
       spacingMeters: request.spacingMeters,
       orientationDegrees: request.orientationDegrees,
@@ -896,6 +1168,7 @@ class _CoverageGeometry {
     required this.lines,
     required this.waypointLatitudes,
     required this.waypointLongitudes,
+    this.paths = const [],
     this.sectionIndexes = const [],
     this.waypointSections = const [],
     this.routeBreaks = const [],
@@ -903,6 +1176,7 @@ class _CoverageGeometry {
 
   /// Each line is `[startLat, startLng, endLat, endLng]`.
   final List<List<double>> lines;
+  final List<CoveragePath> paths;
   final List<int> sectionIndexes;
   final List<bool> routeBreaks;
   final List<double> waypointLatitudes;
@@ -972,44 +1246,141 @@ _CoverageGeometry _coverageGeometry(_CoverageRequest request) {
   // Spread the requested gap so the first and last lines sit on the
   // boundary edges. The gap never exceeds the spacing the user set.
   final step = sweepExtent / (lineCount - 1);
-  final lines = <List<double>>[];
-  final waypointLatitudes = <double>[];
-  final waypointLongitudes = <double>[];
+  final ys = <double>[
+    for (var index = 0; index < lineCount; index++) minY + index * step,
+  ];
 
-  for (var index = 0; index < lineCount; index++) {
-    final y = minY + index * step;
+  final sweeps = <_Sweep>[];
+  for (final y in ys) {
     final crossings = _horizontalCrossings(localPolygon, y);
     for (var pair = 0; pair + 1 < crossings.length; pair += 2) {
-      final start = _fromLocal(
-        _rotate(_LocalPoint(crossings[pair], y), -alignToEast),
-        originLatitude,
-        originLongitude,
-      );
-      final end = _fromLocal(
-        _rotate(_LocalPoint(crossings[pair + 1], y), -alignToEast),
-        originLatitude,
-        originLongitude,
-      );
       if ((crossings[pair + 1] - crossings[pair]).abs() < 0.05) {
         continue;
       }
-      final forward = lines.length.isEven;
-      final from = forward ? start : end;
-      final to = forward ? end : start;
-      lines.add([
-        from.latitude,
-        from.longitude,
-        to.latitude,
-        to.longitude,
-      ]);
+      final leftX = crossings[pair];
+      final rightX = crossings[pair + 1];
+      sweeps.add(
+        _Sweep(
+          y: y,
+          leftX: leftX,
+          rightX: rightX,
+          left: _sweepPoint(
+            x: leftX,
+            y: y,
+            alignToEast: alignToEast,
+            originLatitude: originLatitude,
+            originLongitude: originLongitude,
+          ),
+          right: _sweepPoint(
+            x: rightX,
+            y: y,
+            alignToEast: alignToEast,
+            originLatitude: originLatitude,
+            originLongitude: originLongitude,
+          ),
+        ),
+      );
     }
   }
 
+  final lines = _shortestSweepLines(sweeps);
   return _CoverageGeometry(
     lines: lines,
-    waypointLatitudes: waypointLatitudes,
-    waypointLongitudes: waypointLongitudes,
+    waypointLatitudes: const [],
+    waypointLongitudes: const [],
   );
+}
+
+class _Sweep {
+  const _Sweep({
+    required this.y,
+    required this.leftX,
+    required this.rightX,
+    required this.left,
+    required this.right,
+  });
+
+  final double y;
+  final double leftX;
+  final double rightX;
+  final LatLng left;
+  final LatLng right;
+}
+
+LatLng _sweepPoint({
+  required double x,
+  required double y,
+  required double alignToEast,
+  required double originLatitude,
+  required double originLongitude,
+}) {
+  return _fromLocal(
+    _rotate(_LocalPoint(x, y), -alignToEast),
+    originLatitude,
+    originLongitude,
+  );
+}
+
+/// Four lawnmower orders of the same passes: low edge or high edge first,
+/// and the first pass left-to-right or right-to-left. The reverses share a
+/// length, so the shorter connector side wins. A tie keeps the earlier order.
+List<List<double>> _shortestSweepLines(List<_Sweep> sweeps) {
+  if (sweeps.isEmpty) {
+    return const [];
+  }
+  final lowToHigh = [...sweeps]..sort((a, b) => a.y.compareTo(b.y));
+  final candidates = [
+    _orderSweeps(lowToHigh, startAtHighY: false, firstGoesRight: true),
+    _orderSweeps(lowToHigh, startAtHighY: false, firstGoesRight: false),
+    _orderSweeps(lowToHigh, startAtHighY: true, firstGoesRight: true),
+    _orderSweeps(lowToHigh, startAtHighY: true, firstGoesRight: false),
+  ];
+  var best = candidates.first;
+  var bestLength = _routeLength(best);
+  for (final candidate in candidates.skip(1)) {
+    final length = _routeLength(candidate);
+    if (length + 0.05 < bestLength) {
+      best = candidate;
+      bestLength = length;
+    }
+  }
+  return best;
+}
+
+List<List<double>> _orderSweeps(
+  List<_Sweep> lowToHigh, {
+  required bool startAtHighY,
+  required bool firstGoesRight,
+}) {
+  final visit = startAtHighY ? lowToHigh.reversed.toList() : lowToHigh;
+  final lines = <List<double>>[];
+  for (var index = 0; index < visit.length; index++) {
+    final sweep = visit[index];
+    final goesRight = firstGoesRight == index.isEven;
+    final from = goesRight ? sweep.left : sweep.right;
+    final to = goesRight ? sweep.right : sweep.left;
+    lines.add([from.latitude, from.longitude, to.latitude, to.longitude]);
+  }
+  return lines;
+}
+
+double _routeLength(List<List<double>> lines) {
+  var total = 0.0;
+  LatLng? previousEnd;
+  for (final line in lines) {
+    final start = LatLng(line[0], line[1]);
+    final end = LatLng(line[2], line[3]);
+    if (previousEnd != null) {
+      total += _metersBetween(previousEnd, start);
+    }
+    total += _metersBetween(start, end);
+    previousEnd = end;
+  }
+  return total;
+}
+
+double _metersBetween(LatLng a, LatLng b) {
+  return const Distance().as(LengthUnit.Meter, a, b);
 }
 
 double _sweepExtent(List<_LocalPoint> polygon) {
@@ -1105,6 +1476,72 @@ List<double> _horizontalCrossings(List<_LocalPoint> polygon, double y) {
   return unique;
 }
 
+void _extendCoveragePath({
+  required List<List<LatLng>> paths,
+  required List<int> pathSections,
+  required LatLng start,
+  required LatLng end,
+  required int sectionIndex,
+  required bool startsRoute,
+}) {
+  final continues = !startsRoute &&
+      paths.isNotEmpty &&
+      pathSections.last == sectionIndex;
+  if (!continues) {
+    paths.add([start, end]);
+    pathSections.add(sectionIndex);
+    return;
+  }
+
+  final path = paths.last;
+  if (!_sameMapPoint(path.last, start)) {
+    _addPathPoint(path, start);
+  }
+  _addPathPoint(path, end);
+}
+
+void _addPathPoint(List<LatLng> path, LatLng point) {
+  if (path.isNotEmpty && _sameMapPoint(path.last, point)) {
+    return;
+  }
+  if (path.length >= 2 &&
+      _runsStraight(path[path.length - 2], path.last, point)) {
+    path[path.length - 1] = point;
+    return;
+  }
+  path.add(point);
+}
+
+bool _runsStraight(LatLng start, LatLng middle, LatLng end) {
+  // True when [middle] already lies on the straight segment from [start] to
+  // [end]. A summed length hides a corner when one leg is very short, and
+  // dropping that corner lets the path cut into the no-fly zone.
+  const metersPerDegree = 111320.0;
+  final scale = metersPerDegree * cos(start.latitude * pi / 180);
+  double east(LatLng point) => (point.longitude - start.longitude) * scale;
+  double north(LatLng point) => (point.latitude - start.latitude) * metersPerDegree;
+  final endEast = east(end);
+  final endNorth = north(end);
+  final midEast = east(middle);
+  final midNorth = north(middle);
+  final lengthSquared = endEast * endEast + endNorth * endNorth;
+  if (lengthSquared < 1e-8) {
+    return midEast * midEast + midNorth * midNorth <= 0.0004;
+  }
+  final t = (midEast * endEast + midNorth * endNorth) / lengthSquared;
+  if (t < -0.001 || t > 1.001) {
+    return false;
+  }
+  final offEast = midEast - t * endEast;
+  final offNorth = midNorth - t * endNorth;
+  return offEast * offEast + offNorth * offNorth <= 0.0004;
+}
+
+bool _sameMapPoint(LatLng a, LatLng b) {
+  return (a.latitude - b.latitude).abs() <= 1e-9 &&
+      (a.longitude - b.longitude).abs() <= 1e-9;
+}
+
 bool _appendWaypoints(
   LatLng start,
   LatLng end,
@@ -1112,8 +1549,9 @@ bool _appendWaypoints(
   List<double> longitudes,
   List<int> sections,
   int sectionIndex,
-  bool Function(LatLng point) blocked,
-) {
+  bool Function(LatLng point) blocked, {
+  bool includeStart = true,
+}) {
   const intervalMeters = 12.0;
   const interiorBudget = 2500;
   final length = const Distance().as(LengthUnit.Meter, start, end);
@@ -1122,6 +1560,9 @@ bool _appendWaypoints(
       : max(1, (length / intervalMeters).ceil());
   var droppedInside = false;
   for (var step = 0; step <= steps; step++) {
+    if (!includeStart && step == 0) {
+      continue;
+    }
     final t = step / steps;
     final point = LatLng(
       start.latitude + (end.latitude - start.latitude) * t,

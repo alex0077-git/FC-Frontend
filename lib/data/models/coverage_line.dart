@@ -1,5 +1,19 @@
 import 'package:latlong2/latlong.dart';
 
+/// One continuous coverage route, in flight order.
+///
+/// A new route starts only for another split section, or where a no-fly zone
+/// removes the turn between two passes.
+class CoveragePath {
+  const CoveragePath({
+    required this.points,
+    required this.sectionIndex,
+  });
+
+  final List<LatLng> points;
+  final int sectionIndex;
+}
+
 class CoverageLine {
   const CoverageLine({
     required this.endpoints,

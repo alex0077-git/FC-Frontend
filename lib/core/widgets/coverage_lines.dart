@@ -13,25 +13,27 @@ const _highlightedWidthMeters = 0.7;
 
 List<Polyline> coveragePolylines(
   List<CoverageLine> lines, {
+  List<CoveragePath> paths = const [],
   int? highlightedIndex,
   int activeSplit = -1,
 }) {
-  if (lines.isEmpty) {
+  if (lines.isEmpty && paths.isEmpty) {
     return const [];
   }
 
   final polylines = <Polyline>[
-    for (final route in _sectionRoutes(lines))
-      Polyline(
-        points: route.points,
-        color: activeSplit < 0 || route.section == activeSplit
-            ? _lineColor
-            : _inactiveLineColor,
-        strokeWidth: _lineWidthMeters,
-        useStrokeWidthInMeter: true,
-        strokeCap: StrokeCap.butt,
-        strokeJoin: StrokeJoin.round,
-      ),
+    for (final route in paths.isNotEmpty ? _pathRoutes(paths) : _sectionRoutes(lines))
+      if (route.points.length >= 2)
+        Polyline(
+          points: route.points,
+          color: activeSplit < 0 || route.section == activeSplit
+              ? _lineColor
+              : _inactiveLineColor,
+          strokeWidth: _lineWidthMeters,
+          useStrokeWidthInMeter: true,
+          strokeCap: StrokeCap.butt,
+          strokeJoin: StrokeJoin.miter,
+        ),
   ];
   if (highlightedIndex != null &&
       highlightedIndex >= 0 &&
@@ -55,6 +57,13 @@ class _SectionRoute {
 
   final int section;
   final List<LatLng> points = [];
+}
+
+List<_SectionRoute> _pathRoutes(List<CoveragePath> paths) {
+  return [
+    for (final path in paths)
+      _SectionRoute(path.sectionIndex)..points.addAll(path.points),
+  ];
 }
 
 List<_SectionRoute> _sectionRoutes(List<CoverageLine> lines) {

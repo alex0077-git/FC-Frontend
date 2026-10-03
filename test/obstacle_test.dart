@@ -90,12 +90,8 @@ void main() {
     expect(lines, isNotEmpty);
     expect(repository.state.coverageBlockedByObstacle, isFalse);
     for (final waypoint in repository.state.waypoints) {
-      expect(
-        repository.isPointInsideAnyObstacle(
-          LatLng(waypoint.latitude, waypoint.longitude),
-        ),
-        isFalse,
-      );
+      final point = LatLng(waypoint.latitude, waypoint.longitude);
+      expect(repository.state.obstacles.any((zone) => zone.enters(point)), isFalse);
     }
     for (final line in lines) {
       for (var step = 0; step <= 8; step++) {
@@ -106,7 +102,10 @@ void main() {
           line.endpoints[0].longitude +
               (line.endpoints[1].longitude - line.endpoints[0].longitude) * t,
         );
-        expect(repository.isPointInsideAnyObstacle(point), isFalse);
+        expect(
+          repository.state.obstacles.any((zone) => zone.enters(point)),
+          isFalse,
+        );
       }
     }
 
@@ -116,6 +115,149 @@ void main() {
     expect(_nearLine(lines, _at(18, 16)), isTrue);
     expect(_nearLine(lines, _at(-10, 16)), isFalse);
     expect(_nearLine(lines, _at(10, 16)), isFalse);
+  });
+
+  test('a circle follows straight sides and a square follows its edges', () {
+    final circle = Obstacle(
+      id: 'circle',
+      type: ObstacleType.circle,
+      center: _at(0, 0),
+      radiusMeters: 10,
+    );
+    final through = circle.routeAround(_at(-40, 0), _at(40, 0));
+    expect(through.length, greaterThan(4));
+    expect(through.length, lessThan(Obstacle.circleRouteSides));
+    final buffer = circle.radiusMeters! + Obstacle.circleBufferMeters;
+    final cornerRadius = buffer / cos(pi / Obstacle.circleRouteSides);
+    var cornerSteps = 0;
+    for (var index = 1; index < through.length; index++) {
+      expect(
+        _distanceToSegment(circle.center!, through[index - 1], through[index]),
+        greaterThan(circle.radiusMeters! - Obstacle.borderTouchMeters),
+      );
+      final previous = _xy(through[index - 1], circle.center!);
+      final current = _xy(through[index], circle.center!);
+      final previousDistance = sqrt(previous.$1 * previous.$1 + previous.$2 * previous.$2);
+      final currentDistance = sqrt(current.$1 * current.$1 + current.$2 * current.$2);
+      if ((previousDistance - cornerRadius).abs() > 0.15 ||
+          (currentDistance - cornerRadius).abs() > 0.15) {
+        continue;
+      }
+      var sweep = atan2(current.$2, current.$1) - atan2(previous.$2, previous.$1);
+      while (sweep > pi) {
+        sweep -= 2 * pi;
+      }
+      while (sweep < -pi) {
+        sweep += 2 * pi;
+      }
+      expect(sweep.abs(), closeTo(2 * pi / Obstacle.circleRouteSides, 0.08));
+      expect(previousDistance, greaterThan(buffer));
+      expect(currentDistance, greaterThan(buffer));
+      cornerSteps++;
+    }
+    expect(cornerSteps, greaterThan(0));
+    expect(cornerSteps, lessThan(Obstacle.circleRouteSides));
+
+    final square = Obstacle(
+      id: 'square',
+      type: ObstacleType.square,
+      center: _at(0, 0),
+      sideMeters: 10,
+    );
+    final across = square.routeAround(_at(-40, 0), _at(40, 0));
+    final clip = square.routeAround(_at(-40, 3), _at(40, 6));
+    expect(across.length, inInclusiveRange(3, 4));
+    expect(clip.length, inInclusiveRange(3, 4));
+    for (final bend in [across, clip]) {
+      for (var index = 1; index < bend.length; index++) {
+        expect(square.enters(bend[index]), isFalse);
+      }
+    }
+  });
+
+  test('a circle in the path is a bend in the same connected route', () async {
+    final repository = MissionRepository();
+    _addRectangle(repository);
+    repository.addCircleObstacle(_at(0, 20));
+    repository.updateObstacleRadius(repository.state.obstacles.single.id, 8);
+    await repository.generateCoverage(spacingMeters: 10, orientationDegrees: 0);
+
+    expect(repository.state.coveragePaths, hasLength(1));
+    final points = repository.state.coveragePaths.single.points;
+    expect(points.length, greaterThan(2));
+    final circle = repository.state.obstacles.single;
+    final center = circle.center!;
+    for (var index = 0; index < points.length; index++) {
+      expect(circle.enters(points[index]), isFalse);
+      if (index == 0) {
+        continue;
+      }
+      final mid = LatLng(
+        (points[index - 1].latitude + points[index].latitude) / 2,
+        (points[index - 1].longitude + points[index].longitude) / 2,
+      );
+      expect(circle.enters(mid), isFalse);
+    }
+
+    expect(circle.outline, hasLength(72));
+    for (final point in circle.outline) {
+      final local = _xy(point, center);
+      final distance = sqrt(local.$1 * local.$1 + local.$2 * local.$2);
+      expect(distance, closeTo(8, 0.05));
+    }
+
+    final buffer = circle.radiusMeters! + Obstacle.circleBufferMeters;
+    final cornerRadius = buffer / cos(pi / Obstacle.circleRouteSides);
+    var cornerSteps = 0;
+    for (var index = 1; index < points.length; index++) {
+      final previous = _xy(points[index - 1], center);
+      final current = _xy(points[index], center);
+      final previousDistance = sqrt(previous.$1 * previous.$1 + previous.$2 * previous.$2);
+      final currentDistance = sqrt(current.$1 * current.$1 + current.$2 * current.$2);
+      if ((previousDistance - cornerRadius).abs() > 0.02 ||
+          (currentDistance - cornerRadius).abs() > 0.02) {
+        continue;
+      }
+      var sweep = atan2(current.$2, current.$1) - atan2(previous.$2, previous.$1);
+      while (sweep > pi) {
+        sweep -= 2 * pi;
+      }
+      while (sweep < -pi) {
+        sweep += 2 * pi;
+      }
+      expect(sweep.abs(), closeTo(2 * pi / Obstacle.circleRouteSides, 0.08));
+      expect(previousDistance, greaterThan(buffer));
+      expect(currentDistance, greaterThan(buffer));
+      cornerSteps++;
+    }
+    expect(cornerSteps, greaterThan(0));
+    for (final point in points) {
+      final local = _xy(point, center);
+      final distance = sqrt(local.$1 * local.$1 + local.$2 * local.$2);
+      if (distance > cornerRadius + 0.05) {
+        continue;
+      }
+      expect(_distanceToRing(point, center, cornerRadius), lessThan(0.05));
+    }
+    for (var index = 1; index < points.length; index++) {
+      expect(
+        _distanceToSegment(center, points[index - 1], points[index]),
+        greaterThan(circle.radiusMeters! - Obstacle.borderTouchMeters),
+      );
+    }
+
+    final straight = repository.state.coverageLines.where((line) {
+      return _distanceToSegment(center, line.endpoints[0], line.endpoints[1]) > 12;
+    });
+    expect(straight, isNotEmpty);
+    for (final line in straight) {
+      final index = _pathIndex(points, line.endpoints[0]);
+      expect(index, greaterThanOrEqualTo(0));
+      final nextIsEnd = index + 1 < points.length &&
+          _samePoint(points[index + 1], line.endpoints[1]);
+      final previousIsEnd = index > 0 && _samePoint(points[index - 1], line.endpoints[1]);
+      expect(nextIsEnd || previousIsEnd, isTrue);
+    }
   });
 
   testWidgets('square side locks after Save and a circle still resizes', (tester) async {
@@ -212,6 +354,20 @@ void _addRectangle(MissionRepository repository) {
   }
 }
 
+int _pathIndex(List<LatLng> points, LatLng target) {
+  for (var index = 0; index < points.length; index++) {
+    if (_samePoint(points[index], target)) {
+      return index;
+    }
+  }
+  return -1;
+}
+
+bool _samePoint(LatLng a, LatLng b) {
+  return (a.latitude - b.latitude).abs() < 1e-8 &&
+      (a.longitude - b.longitude).abs() < 1e-8;
+}
+
 bool _nearLine(List<CoverageLine> lines, LatLng point) {
   for (final line in lines) {
     if (_distanceToSegment(point, line.endpoints[0], line.endpoints[1]) <= 1.5) {
@@ -219,6 +375,30 @@ bool _nearLine(List<CoverageLine> lines, LatLng point) {
     }
   }
   return false;
+}
+
+double _distanceToRing(LatLng point, LatLng center, double cornerRadius) {
+  final scale = _metersPerDegree * cos(center.latitude * pi / 180);
+  final step = 2 * pi / Obstacle.circleRouteSides;
+  final vertices = <LatLng>[
+    for (var index = 0; index < Obstacle.circleRouteSides; index++)
+      LatLng(
+        center.latitude + cornerRadius * sin(index * step) / _metersPerDegree,
+        center.longitude + cornerRadius * cos(index * step) / scale,
+      ),
+  ];
+  var nearest = double.infinity;
+  for (var index = 0; index < vertices.length; index++) {
+    final distance = _distanceToSegment(
+      point,
+      vertices[index],
+      vertices[(index + 1) % vertices.length],
+    );
+    if (distance < nearest) {
+      nearest = distance;
+    }
+  }
+  return nearest;
 }
 
 double _distanceToSegment(LatLng point, LatLng start, LatLng end) {

@@ -16,6 +16,7 @@ import 'package:fc_frontend/core/widgets/responsive.dart';
 import 'package:fc_frontend/features/ground_plan/boundary_point_dialog.dart';
 import 'package:fc_frontend/features/ground_plan/boundary_point_marker.dart';
 import 'package:fc_frontend/features/ground_plan/obstacle_mapping_section.dart';
+import 'package:fc_frontend/features/ground_plan/waypoint_path.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_map/flutter_map.dart';
@@ -914,11 +915,14 @@ class _PlanMapState extends State<_PlanMap> {
               PolylineLayer(
                 polylines: coveragePolylines(
                   widget.mission.coverageLines,
+                  paths: widget.mission.coveragePaths,
                   activeSplit: widget.mission.activeSplit,
                 ),
                 simplificationTolerance: 0,
                 cullingMargin: null,
               ),
+            if (widget.mission.coverageLines.isEmpty)
+              ...waypointPathLine(widget.mission.waypoints),
             ...obstacleMapLayers(
               obstacles: widget.mission.obstacles,
               selectedId: widget.selectedObstacleId,
@@ -996,6 +1000,10 @@ class _PlanMapState extends State<_PlanMap> {
                     child: const _IndexMarker(label: 'E'),
                   ),
               ],
+            ),
+            ...waypointPathMarkers(
+              widget.mission.waypoints,
+              activeSplit: widget.mission.activeSplit,
             ),
           ],
         ),
@@ -1440,6 +1448,7 @@ class _WaypointList extends StatelessWidget {
                 final dimmed = activeSplit >= 0 && waypoint.sectionIndex != activeSplit;
                 return _WaypointRow(
                   index: index,
+                  label: waypointPathLabel(index, waypoints.length),
                   waypoint: waypoint,
                   selected: waypoint.id == selectedId && !dimmed,
                   dimmed: dimmed,
@@ -1458,6 +1467,7 @@ class _WaypointList extends StatelessWidget {
 class _WaypointRow extends StatelessWidget {
   const _WaypointRow({
     required this.index,
+    required this.label,
     required this.waypoint,
     required this.selected,
     required this.dimmed,
@@ -1467,6 +1477,7 @@ class _WaypointRow extends StatelessWidget {
   });
 
   final int index;
+  final String label;
   final Waypoint waypoint;
   final bool selected;
   final bool dimmed;
@@ -1483,7 +1494,7 @@ class _WaypointRow extends StatelessWidget {
       enabled: !dimmed,
       contentPadding: EdgeInsets.zero,
       title: Text(
-        'Waypoint ${index + 1}',
+        label,
         style: TextStyle(color: muted),
       ),
       subtitle: Text(
@@ -1495,12 +1506,12 @@ class _WaypointRow extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           IconButton(
-            tooltip: 'Edit waypoint ${index + 1}',
+            tooltip: 'Edit $label',
             onPressed: canEdit ? onSelect : null,
             icon: const Icon(Icons.edit_outlined),
           ),
           IconButton(
-            tooltip: 'Delete waypoint ${index + 1}',
+            tooltip: 'Delete $label',
             onPressed: canEdit ? onDelete : null,
             icon: const Icon(Icons.delete_outline),
           ),
