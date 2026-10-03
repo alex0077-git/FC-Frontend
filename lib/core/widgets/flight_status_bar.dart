@@ -1,11 +1,13 @@
 import 'package:fc_frontend/core/theme/app_theme.dart';
-import 'package:fc_frontend/data/models/battery_settings.dart';
 import 'package:fc_frontend/core/widgets/bottom_nav_bar.dart';
 import 'package:fc_frontend/core/widgets/connect_panel.dart';
+import 'package:fc_frontend/core/widgets/settings_hub.dart';
+import 'package:fc_frontend/data/models/battery_settings.dart';
 import 'package:fc_frontend/data/repositories/settings_repository.dart';
 import 'package:fc_frontend/data/repositories/telemetry_repository.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 class FlightStatusBar extends ConsumerWidget {
   const FlightStatusBar({super.key});
@@ -20,6 +22,7 @@ class FlightStatusBar extends ConsumerWidget {
     final batteryColor = _batteryColor(battery, settings, statusColors);
 
     final percent = battery == null ? null : battery.clamp(0, 100) / 100;
+    final location = GoRouterState.of(context).uri.path;
 
     return Material(
       color: AppTheme.surface,
@@ -44,6 +47,18 @@ class FlightStatusBar extends ConsumerWidget {
                   icon: Icons.flight,
                   label: telemetry == null ? 'Mode --' : telemetry.mode,
                 ),
+              ),
+              _TopBarIcon(
+                tooltip: 'Profile',
+                icon: Icons.person_outline,
+                selected: location == '/profile',
+                onPressed: () => context.go('/profile'),
+              ),
+              _TopBarIcon(
+                tooltip: 'Settings',
+                icon: Icons.settings_outlined,
+                selected: location.startsWith('/settings'),
+                onPressed: () => showSettingsHub(context),
               ),
               TextButton(
                 style: TextButton.styleFrom(
@@ -91,6 +106,34 @@ class FlightStatusBar extends ConsumerWidget {
       backgroundColor: Theme.of(navigatorContext).colorScheme.surface,
       showDragHandle: true,
       builder: (context) => const ConnectPanel(),
+    );
+  }
+}
+
+class _TopBarIcon extends StatelessWidget {
+  const _TopBarIcon({
+    required this.tooltip,
+    required this.icon,
+    required this.selected,
+    required this.onPressed,
+  });
+
+  final String tooltip;
+  final IconData icon;
+  final bool selected;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return IconButton(
+      tooltip: tooltip,
+      onPressed: onPressed,
+      iconSize: 16,
+      padding: EdgeInsets.zero,
+      visualDensity: VisualDensity.compact,
+      constraints: const BoxConstraints.tightFor(width: 28, height: 28),
+      icon: Icon(icon, color: selected ? scheme.primary : scheme.onSurface),
     );
   }
 }

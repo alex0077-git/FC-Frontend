@@ -14,6 +14,7 @@ import 'package:fc_frontend/data/repositories/mission_repository.dart';
 import 'package:fc_frontend/data/repositories/telemetry_repository.dart';
 import 'package:fc_frontend/core/widgets/responsive.dart';
 import 'package:fc_frontend/features/ground_plan/boundary_point_dialog.dart';
+import 'package:fc_frontend/features/ground_plan/ground_plan_section.dart';
 import 'package:fc_frontend/features/ground_plan/boundary_point_marker.dart';
 import 'package:fc_frontend/features/ground_plan/obstacle_mapping_section.dart';
 import 'package:fc_frontend/features/ground_plan/waypoint_path.dart';
@@ -36,8 +37,6 @@ List<LatLng> _boundaryRing(MissionState mission) {
 enum _MapPlacement { boundary, pointA, pointB, split }
 
 enum _SplitSlot { first, end }
-
-enum _SidebarSection { boundary, split, obstacles, waypoints, history }
 
 class GroundPlanPage extends ConsumerStatefulWidget {
   const GroundPlanPage({super.key});
@@ -63,7 +62,6 @@ class _GroundPlanPageState extends ConsumerState<GroundPlanPage> {
   ObstacleTool? _obstacleTool;
   String? _selectedObstacleId;
   LatLng? _obstacleMoveOrigin;
-  _SidebarSection? _openSection = _SidebarSection.boundary;
 
   @override
   void dispose() {
@@ -75,6 +73,7 @@ class _GroundPlanPageState extends ConsumerState<GroundPlanPage> {
   @override
   Widget build(BuildContext context) {
     final mission = ref.watch(missionRepositoryProvider);
+    final openSection = ref.watch(groundPlanSectionProvider).section;
     final selected = _waypointById(mission.waypoints, _selectedWaypointId);
     final hasCoverage = mission.coverageLines.isNotEmpty;
     final canUndo =
@@ -110,49 +109,76 @@ class _GroundPlanPageState extends ConsumerState<GroundPlanPage> {
       child: Focus(
         autofocus: true,
         child: Scaffold(
-          body: Row(
-            children: [
-              Expanded(flex: 3, child: _planMap(mission)),
-              SizedBox(
-                width: Responsive.sidePanelWidth(context, desktopWidth: 340),
-                child: Material(
-                  color: AppTheme.surface,
-                  child: Column(
-                    children: [
-                      Expanded(
-                        child: ListView(
-                          padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
-                          children: _planPanelChildren(
-                            mission: mission,
-                            selected: selected,
-                            canUndo: canUndo,
-                            canRedo: canRedo,
+          body: LayoutBuilder(
+            builder: (context, constraints) {
+              final sheetMax = openSection == null
+                  ? 0.0
+                  : (constraints.maxHeight * 0.42).clamp(120.0, 380.0);
+              final controlsMax = (constraints.maxHeight - sheetMax - 16)
+                  .clamp(96.0, 440.0);
+              final controlsWidth = (constraints.maxWidth - 168).clamp(220.0, 360.0);
+              return Stack(
+                children: [
+                  Positioned.fill(child: _planMap(mission)),
+                  if (openSection != null)
+                    Positioned(
+                      left: 0,
+                      right: 0,
+                      bottom: 0,
+                      child: _SectionPanel(
+                        title: _sectionTitle(openSection),
+                        maxHeight: sheetMax,
+                        onClose: () {
+                          ref.read(groundPlanSectionProvider.notifier).close();
+                        },
+                        child: _sectionContent(
+                          section: openSection,
+                          mission: mission,
+                          selected: selected,
+                          canUndo: canUndo,
+                          canRedo: canRedo,
+                        ),
+                      ),
+                    ),
+                  if (hasCoverage)
+                    Positioned(
+                      left: 8,
+                      bottom: sheetMax + 8,
+                      width: controlsWidth,
+                      child: ConstrainedBox(
+                        constraints: BoxConstraints(maxHeight: controlsMax),
+                        child: const SingleChildScrollView(
+                          child: Material(
+                            color: AppTheme.surface,
+                            elevation: 4,
+                            borderRadius: BorderRadius.all(Radius.circular(12)),
+                            child: Padding(
+                              padding: EdgeInsets.all(8),
+                              child: CoverageAdjustControls(),
+                            ),
                           ),
                         ),
                       ),
-                      if (hasCoverage)
-                        const Padding(
-                          padding: EdgeInsets.fromLTRB(12, 0, 12, 8),
-                          child: CoverageAdjustControls(),
-                        ),
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-                        child: FilledButton(
-                          style: FilledButton.styleFrom(
-                            minimumSize: const Size.fromHeight(48),
-                          ),
-                          onPressed: !mission.boundaryEditingLocked &&
-                                  mission.boundaryPoints.length >= 3
-                              ? _callForJob
-                              : null,
-                          child: const Text('Call for Job'),
-                        ),
+                    ),
+                  Positioned(
+                    top: 12,
+                    right: 12,
+                    child: FilledButton(
+                      style: FilledButton.styleFrom(
+                        minimumSize: const Size(0, 48),
+                        disabledBackgroundColor: const Color(0xFF334155),
+                        disabledForegroundColor: Colors.white,
                       ),
-                    ],
+                      onPressed: !mission.boundaryEditingLocked &&
+                              mission.boundaryPoints.length >= 3
+                          ? _callForJob
+                          : null,
+                      child: const Text('Call for Job'),
+                    ),
                   ),
-                ),
-              ),
-            ],
+                ],
+              );
+            },
           ),
         ),
       ),
@@ -183,32 +209,32 @@ class _GroundPlanPageState extends ConsumerState<GroundPlanPage> {
     );
   }
 
-  List<Widget> _planPanelChildren({
+  String _sectionTitle(GroundPlanSection section) {
+    return switch (section) {
+      GroundPlanSection.boundary => 'Boundaries',
+      GroundPlanSection.split => 'Split',
+      GroundPlanSection.obstacles => 'Obstacles',
+      GroundPlanSection.waypoints => 'Waypoints',
+      GroundPlanSection.history => 'History',
+    };
+  }
+
+  Widget _sectionContent({
+    required GroundPlanSection section,
     required MissionState mission,
     required Waypoint? selected,
     required bool canUndo,
     required bool canRedo,
   }) {
-    return [
-      _SidebarSectionTile(
-        icon: Icons.polyline_outlined,
-        label: 'Boundary',
-        expanded: _openSection == _SidebarSection.boundary,
-        onTap: () => _toggleSidebar(_SidebarSection.boundary),
-        child: _BoundaryActions(
-          canUndo: canUndo,
-          canRedo: canRedo,
-          onUndo: _undoBoundary,
-          onRedo: _redoBoundary,
-          onReset: _resetBoundary,
-        ),
+    return switch (section) {
+      GroundPlanSection.boundary => _BoundaryActions(
+        canUndo: canUndo,
+        canRedo: canRedo,
+        onUndo: _undoBoundary,
+        onRedo: _redoBoundary,
+        onReset: _resetBoundary,
       ),
-      _SidebarSectionTile(
-        icon: Icons.call_split,
-        label: 'Split (A/B)',
-        expanded: _openSection == _SidebarSection.split,
-        onTap: () => _toggleSidebar(_SidebarSection.split),
-        child: Column(
+      GroundPlanSection.split => Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             _FieldSplitControls(
@@ -239,13 +265,7 @@ class _GroundPlanPageState extends ConsumerState<GroundPlanPage> {
             ),
           ],
         ),
-      ),
-      _SidebarSectionTile(
-        icon: Icons.block,
-        label: 'Obstacles',
-        expanded: _openSection == _SidebarSection.obstacles,
-        onTap: () => _toggleSidebar(_SidebarSection.obstacles),
-        child: Column(
+      GroundPlanSection.obstacles => Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             OutlinedButton(
@@ -279,13 +299,7 @@ class _GroundPlanPageState extends ConsumerState<GroundPlanPage> {
             ),
           ],
         ),
-      ),
-      _SidebarSectionTile(
-        icon: Icons.place_outlined,
-        label: 'Waypoints',
-        expanded: _openSection == _SidebarSection.waypoints,
-        onTap: () => _toggleSidebar(_SidebarSection.waypoints),
-        child: Column(
+      GroundPlanSection.waypoints => Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             _WaypointList(
@@ -308,13 +322,7 @@ class _GroundPlanPageState extends ConsumerState<GroundPlanPage> {
             ),
           ],
         ),
-      ),
-      _SidebarSectionTile(
-        icon: Icons.history,
-        label: 'History',
-        expanded: _openSection == _SidebarSection.history,
-        onTap: () => _toggleSidebar(_SidebarSection.history),
-        child: Column(
+      GroundPlanSection.history => Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             _FlightHistory(
@@ -328,17 +336,19 @@ class _GroundPlanPageState extends ConsumerState<GroundPlanPage> {
             ),
           ],
         ),
-      ),
-    ];
-  }
-
-  void _toggleSidebar(_SidebarSection section) {
-    setState(() {
-      _openSection = _openSection == section ? null : section;
-    });
+    };
   }
 
   void _onMapTap(TapPosition tapPosition, LatLng point) {
+    final sheetOpen = ref.read(groundPlanSectionProvider).section != null;
+    final placing = _mappingObstacles ||
+        _placement == _MapPlacement.pointA ||
+        _placement == _MapPlacement.pointB ||
+        _placement == _MapPlacement.split;
+    if (sheetOpen && !placing) {
+      ref.read(groundPlanSectionProvider.notifier).close();
+      return;
+    }
     if (_mappingObstacles) {
       _onObstacleTap(point);
       return;
@@ -760,10 +770,8 @@ class _GroundPlanPageState extends ConsumerState<GroundPlanPage> {
   }
 
   void _selectWaypoint(Waypoint waypoint) {
-    setState(() {
-      _selectedWaypointId = waypoint.id;
-      _openSection = _SidebarSection.waypoints;
-    });
+    setState(() => _selectedWaypointId = waypoint.id);
+    ref.read(groundPlanSectionProvider.notifier).open(GroundPlanSection.waypoints);
     _altitudeController.text = waypoint.altitude.toStringAsFixed(1);
     _speedController.text = waypoint.speed.toStringAsFixed(1);
   }
@@ -1108,49 +1116,64 @@ class _IndexMarker extends StatelessWidget {
   }
 }
 
-class _SidebarSectionTile extends StatelessWidget {
-  const _SidebarSectionTile({
-    required this.icon,
-    required this.label,
-    required this.expanded,
-    required this.onTap,
+class _SectionPanel extends StatelessWidget {
+  const _SectionPanel({
+    required this.title,
+    required this.maxHeight,
+    required this.onClose,
     required this.child,
   });
 
-  final IconData icon;
-  final String label;
-  final bool expanded;
-  final VoidCallback onTap;
+  final String title;
+  final double maxHeight;
+  final VoidCallback onClose;
   final Widget child;
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        InkWell(
-          onTap: onTap,
-          child: SizedBox(
-            height: 48,
-            child: Row(
-              children: [
-                Icon(icon, size: 20),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(label, style: Theme.of(context).textTheme.titleSmall),
-                ),
-                Icon(expanded ? Icons.expand_less : Icons.expand_more),
-              ],
+    return Material(
+      color: AppTheme.surface,
+      elevation: 8,
+      clipBehavior: Clip.antiAlias,
+      borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxHeight: maxHeight),
+        child: Column(
+          children: [
+            const SizedBox(height: 8),
+            Container(
+              width: 36,
+              height: 4,
+              decoration: BoxDecoration(
+                color: const Color(0xFF3D4A5C),
+                borderRadius: BorderRadius.circular(2),
+              ),
             ),
-          ),
+            SizedBox(
+              height: 40,
+              child: Row(
+                children: [
+                  const SizedBox(width: 16),
+                  Expanded(
+                    child: Text(title, style: Theme.of(context).textTheme.titleSmall),
+                  ),
+                  IconButton(
+                    tooltip: 'Close',
+                    onPressed: onClose,
+                    icon: const Icon(Icons.close),
+                  ),
+                ],
+              ),
+            ),
+            Expanded(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                child: child,
+              ),
+            ),
+          ],
         ),
-        if (expanded)
-          Padding(
-            padding: const EdgeInsets.only(bottom: 8),
-            child: child,
-          ),
-        const Divider(height: 1),
-      ],
+      ),
     );
   }
 }

@@ -36,7 +36,7 @@ void main() {
 
   testWidgets('map flight fits a phone in landscape', (tester) async {
     await pumpPage(tester, const Size(844, 390), const MapFlightPage());
-    expect(find.text('Takeoff'), findsOneWidget);
+    expect(find.text('Altitude'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 

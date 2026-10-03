@@ -53,8 +53,10 @@ void main() {
     expect(find.byType(MapFlightPage), findsNothing);
     expect(find.byType(BottomNavBar), findsOneWidget);
     expect(find.text('Call for Job'), findsOneWidget);
-    expect(_navIconColor(tester, 'Ground Plan'), _primary(tester));
-    expect(_navIconColor(tester, 'Map/Flight'), isNot(_primary(tester)));
+    expect(find.text('Boundaries'), findsOneWidget);
+    expect(find.text('Takeoff'), findsNothing);
+    expect(_topIcon('Profile'), findsOneWidget);
+    expect(_topIcon('Settings'), findsOneWidget);
   });
 
   testWidgets('Start still opens the map and flight page in the app shell', (
@@ -70,21 +72,14 @@ void main() {
     expect(find.byType(GroundPlanPage), findsNothing);
     expect(find.byType(BottomNavBar), findsOneWidget);
     expect(find.text('Takeoff'), findsOneWidget);
-    expect(_navIconColor(tester, 'Map/Flight'), _primary(tester));
-    expect(_navIconColor(tester, 'Ground Plan'), isNot(_primary(tester)));
+    expect(find.text('Boundaries'), findsNothing);
+    expect(_topIcon('Profile'), findsOneWidget);
+    expect(_topIcon('Settings'), findsOneWidget);
   });
 }
 
-Color _primary(WidgetTester tester) {
-  return Theme.of(tester.element(find.byType(BottomNavBar))).colorScheme.primary;
-}
-
-Color? _navIconColor(WidgetTester tester, String tooltip) {
-  final button = tester.widget<IconButton>(
-    find.byWidgetPredicate(
-      (widget) => widget is IconButton && widget.tooltip == tooltip,
-    ),
+Finder _topIcon(String tooltip) {
+  return find.byWidgetPredicate(
+    (widget) => widget is IconButton && widget.tooltip == tooltip,
   );
-  final icon = button.icon;
-  return icon is Icon ? icon.color : null;
 }

@@ -6,6 +6,7 @@ import 'package:fc_frontend/data/models/obstacle.dart';
 import 'package:fc_frontend/data/repositories/mission_repository.dart';
 import 'package:fc_frontend/data/repositories/settings_repository.dart';
 import 'package:fc_frontend/features/ground_plan/ground_plan_page.dart';
+import 'package:fc_frontend/features/ground_plan/ground_plan_section.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -284,7 +285,9 @@ void main() {
     repository.addBoundaryPoint(latitude: 12.974, longitude: 77.595);
     await tester.pump();
 
-    await tester.tap(find.text('Obstacles'));
+    ProviderScope.containerOf(
+      tester.element(find.byType(GroundPlanPage)),
+    ).read(groundPlanSectionProvider.notifier).open(GroundPlanSection.obstacles);
     await tester.pump();
     await tester.tap(find.text('Add Obstacle'));
     await tester.pump();

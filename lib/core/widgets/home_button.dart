@@ -6,11 +6,25 @@ class HomeButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return IconButton(
-      tooltip: 'Home',
-      style: IconButton.styleFrom(minimumSize: const Size(48, 48)),
-      onPressed: () => context.go('/'),
-      icon: const Icon(Icons.home_outlined),
+    final color = Theme.of(context).colorScheme.onSurface;
+    return Tooltip(
+      message: 'Home',
+      child: InkWell(
+        onTap: () => context.go('/'),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.home_outlined, size: 22, color: color),
+            const SizedBox(height: 2),
+            Text(
+              'Home',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(fontSize: 11, height: 1.1, color: color),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

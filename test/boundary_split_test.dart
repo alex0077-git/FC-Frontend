@@ -5,6 +5,7 @@ import 'package:fc_frontend/core/theme/app_theme.dart';
 import 'package:fc_frontend/data/repositories/mission_repository.dart';
 import 'package:fc_frontend/data/repositories/settings_repository.dart';
 import 'package:fc_frontend/features/ground_plan/ground_plan_page.dart';
+import 'package:fc_frontend/features/ground_plan/ground_plan_section.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -196,9 +197,11 @@ void main() {
 
     repo.addBoundaryPoint(latitude: 12.974, longitude: 77.595);
     await tester.pump();
-    await tester.tap(find.text('Split (A/B)'));
+    ProviderScope.containerOf(
+      tester.element(find.byType(GroundPlanPage)),
+    ).read(groundPlanSectionProvider.notifier).open(GroundPlanSection.split);
     await tester.pump();
-    await tester.tap(find.text('Split'));
+    await tester.tap(find.widgetWithText(OutlinedButton, 'Split'));
     await tester.pump();
     expect(find.text('First Point'), findsOneWidget);
     expect(find.text('End Point'), findsOneWidget);

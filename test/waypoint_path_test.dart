@@ -3,6 +3,7 @@ import 'package:fc_frontend/data/models/waypoint.dart';
 import 'package:fc_frontend/data/repositories/mission_repository.dart';
 import 'package:fc_frontend/data/repositories/settings_repository.dart';
 import 'package:fc_frontend/features/ground_plan/ground_plan_page.dart';
+import 'package:fc_frontend/features/ground_plan/ground_plan_section.dart';
 import 'package:fc_frontend/features/ground_plan/waypoint_path.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
@@ -66,7 +67,9 @@ void main() {
     expect(find.text('E'), findsOneWidget);
     expect(find.text('2'), findsNothing);
 
-    await tester.tap(find.text('Waypoints'));
+    ProviderScope.containerOf(
+      tester.element(find.byType(GroundPlanPage)),
+    ).read(groundPlanSectionProvider.notifier).open(GroundPlanSection.waypoints);
     await tester.pump();
     expect(find.text('Start'), findsOneWidget);
     expect(find.text('End'), findsOneWidget);

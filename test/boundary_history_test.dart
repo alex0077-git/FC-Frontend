@@ -3,6 +3,7 @@ import 'package:fc_frontend/data/models/boundary_edit.dart';
 import 'package:fc_frontend/data/repositories/mission_repository.dart';
 import 'package:fc_frontend/data/repositories/settings_repository.dart';
 import 'package:fc_frontend/features/ground_plan/ground_plan_page.dart';
+import 'package:fc_frontend/features/ground_plan/ground_plan_section.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -108,6 +109,11 @@ void main() {
         ),
       ),
     );
+    await tester.pump();
+
+    ProviderScope.containerOf(
+      tester.element(find.byType(GroundPlanPage)),
+    ).read(groundPlanSectionProvider.notifier).open(GroundPlanSection.boundary);
     await tester.pump();
 
     expect(_historyButton(tester, 'Undo').onPressed, isNull);

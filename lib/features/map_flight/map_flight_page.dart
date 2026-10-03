@@ -20,23 +20,12 @@ class MapFlightPage extends ConsumerStatefulWidget {
 }
 
 class _MapFlightPageState extends ConsumerState<MapFlightPage> {
-  bool? _commandedArmed;
-
   @override
   Widget build(BuildContext context) {
     final telemetry = ref.watch(telemetryStreamProvider).asData?.value;
     final batterySettings = ref.watch(batterySettingsProvider);
-    final armed = _commandedArmed ?? telemetry?.armed ?? false;
 
     final sideBySide = Responsive.useCompactMapLayout(context);
-    final commands = _CommandRow(
-      armed: armed,
-      stacked: sideBySide,
-      onArmDisarm: () => _onArmDisarm(armed),
-      onTakeoff: _showCommandSent,
-      onRtl: _onRtl,
-      onLand: _showCommandSent,
-    );
     final map = _FlightMap(telemetry: telemetry);
 
     return Scaffold(
@@ -60,7 +49,6 @@ class _MapFlightPageState extends ConsumerState<MapFlightPage> {
                             telemetry: telemetry,
                             stacked: true,
                           ),
-                          commands,
                         ],
                       ),
                     ),
@@ -71,70 +59,10 @@ class _MapFlightPageState extends ConsumerState<MapFlightPage> {
           else ...[
             Expanded(child: map),
             _TelemetryCards(telemetry: telemetry),
-            commands,
           ],
         ],
       ),
     );
-  }
-
-  Future<void> _onArmDisarm(bool armed) async {
-    final confirmed = await _confirm(
-      title: armed ? 'Disarm' : 'Arm',
-      message: armed ? 'Disarm the drone?' : 'Arm the drone?',
-    );
-    if (!confirmed || !mounted) {
-      return;
-    }
-
-    setState(() => _commandedArmed = !armed);
-    _showCommandSent();
-  }
-
-  Future<void> _onRtl() async {
-    final confirmed = await _confirm(
-      title: 'RTL',
-      message: 'Command the drone to return to launch?',
-    );
-    if (!confirmed || !mounted) {
-      return;
-    }
-
-    _showCommandSent();
-  }
-
-  Future<bool> _confirm({required String title, required String message}) async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) {
-        return AlertDialog(
-          title: Text(title),
-          content: Text(message),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(false),
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.of(context).pop(true),
-              child: const Text('Confirm'),
-            ),
-          ],
-        );
-      },
-    );
-    return confirmed ?? false;
-  }
-
-  void _showCommandSent() {
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(
-        const SnackBar(
-          behavior: SnackBarBehavior.floating,
-          content: Text('Command sent (simulated)'),
-        ),
-      );
   }
 }
 
@@ -391,67 +319,6 @@ class _ReadingCard extends StatelessWidget {
               ),
             ),
           ],
-        ),
-      ),
-    );
-  }
-}
-
-class _CommandRow extends StatelessWidget {
-  const _CommandRow({
-    required this.armed,
-    required this.stacked,
-    required this.onArmDisarm,
-    required this.onTakeoff,
-    required this.onRtl,
-    required this.onLand,
-  });
-
-  final bool armed;
-  final bool stacked;
-  final VoidCallback onArmDisarm;
-  final VoidCallback onTakeoff;
-  final VoidCallback onRtl;
-  final VoidCallback onLand;
-
-  @override
-  Widget build(BuildContext context) {
-    final buttons = [
-      _CommandButton(label: armed ? 'Disarm' : 'Arm', onPressed: onArmDisarm),
-      _CommandButton(label: 'Takeoff', onPressed: onTakeoff),
-      _CommandButton(label: 'RTL', onPressed: onRtl),
-      _CommandButton(label: 'Land', onPressed: onLand),
-    ];
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 4, 12, 8),
-      child: stacked
-          ? Column(
-              children: [
-                Row(children: [buttons[0], buttons[1]]),
-                const SizedBox(height: 8),
-                Row(children: [buttons[2], buttons[3]]),
-              ],
-            )
-          : Row(children: buttons),
-    );
-  }
-}
-
-class _CommandButton extends StatelessWidget {
-  const _CommandButton({required this.label, required this.onPressed});
-
-  final String label;
-  final VoidCallback onPressed;
-
-  @override
-  Widget build(BuildContext context) {
-    return Expanded(
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 4),
-        child: FilledButton(
-          style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
-          onPressed: onPressed,
-          child: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis),
         ),
       ),
     );
