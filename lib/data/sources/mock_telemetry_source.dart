@@ -1,8 +1,10 @@
 import 'dart:async';
 import 'dart:math';
 
+import 'package:fc_frontend/core/geometry/local_meters.dart';
 import 'package:fc_frontend/data/models/telemetry.dart';
 import 'package:fc_frontend/data/sources/telemetry_source.dart';
+import 'package:latlong2/latlong.dart';
 
 class MockTelemetrySource implements TelemetrySource {
   MockTelemetrySource() {
@@ -10,7 +12,6 @@ class MockTelemetrySource implements TelemetrySource {
   }
 
   static const _interval = Duration(milliseconds: 500);
-  static const _metersPerDegree = 111320.0;
   static const _stepMeters = 2.0;
 
   final StreamController<Telemetry> _controller =
@@ -95,14 +96,12 @@ class MockTelemetrySource implements TelemetrySource {
 
   void _advancePosition() {
     final headingRadians = _heading * pi / 180;
-    final latitudeRadians = _latitude * pi / 180;
-    final nextLatitude =
-        _latitude + (_stepMeters * cos(headingRadians)) / _metersPerDegree;
-    final nextLongitude =
-        _longitude +
-        (_stepMeters * sin(headingRadians)) /
-            (_metersPerDegree * cos(latitudeRadians));
-    _latitude = nextLatitude;
-    _longitude = nextLongitude;
+    final next = shiftByMeters(
+      LatLng(_latitude, _longitude),
+      _stepMeters * sin(headingRadians),
+      _stepMeters * cos(headingRadians),
+    );
+    _latitude = next.latitude;
+    _longitude = next.longitude;
   }
 }

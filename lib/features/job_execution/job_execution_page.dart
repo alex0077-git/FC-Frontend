@@ -3,8 +3,7 @@ import 'package:fc_frontend/core/theme/app_theme.dart';
 import 'package:fc_frontend/core/widgets/coverage_lines.dart';
 import 'package:fc_frontend/core/widgets/obstacle_map_layers.dart';
 import 'package:fc_frontend/features/ground_plan/waypoint_path.dart';
-import 'package:fc_frontend/core/widgets/joystick_control.dart';
-import 'package:fc_frontend/core/widgets/line_spacing_control.dart';
+import 'package:fc_frontend/core/widgets/coverage_adjust_controls.dart';
 import 'package:fc_frontend/core/widgets/responsive.dart';
 import 'package:fc_frontend/data/models/coverage_line.dart';
 import 'package:fc_frontend/data/repositories/mission_repository.dart';
@@ -14,7 +13,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:latlong2/latlong.dart';
 
-const _mapCenter = LatLng(12.9716, 77.5946);
 
 class JobExecutionPage extends ConsumerStatefulWidget {
   const JobExecutionPage({super.key});
@@ -55,28 +53,7 @@ class _JobExecutionPageState extends ConsumerState<JobExecutionPage> {
                 children: [
                   const _Guidelines(),
                   const SizedBox(height: 20),
-                  JoystickControl(
-                    label: 'Orientation',
-                    degrees: mission.orientationDegrees,
-                    onChanged: (degrees) => _setOrientation(
-                      degrees,
-                      mission.spacingMeters,
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  LineSpacingControl(
-                    spacingMeters: mission.spacingMeters,
-                    lowerMeters: MissionRepository.lineSpacingLowerBound(
-                      mission.boundaryPoints,
-                    ),
-                    upperMeters: MissionRepository.lineSpacingUpperBound(
-                      mission.boundaryPoints,
-                    ),
-                    onChanged: (spacing) => _setSpacing(
-                      spacing,
-                      mission.orientationDegrees,
-                    ),
-                  ),
+                  const CoverageAdjustControls(gap: 12),
                   const SizedBox(height: 16),
                   Text(
                     lineCount == 0
@@ -107,20 +84,6 @@ class _JobExecutionPageState extends ConsumerState<JobExecutionPage> {
           ),
         ],
       ),
-    );
-  }
-
-  void _setOrientation(double degrees, double spacingMeters) {
-    ref.read(missionRepositoryProvider.notifier).scheduleCoverage(
-      spacingMeters: spacingMeters,
-      orientationDegrees: degrees,
-    );
-  }
-
-  void _setSpacing(double spacingMeters, double orientationDegrees) {
-    ref.read(missionRepositoryProvider.notifier).scheduleCoverage(
-      spacingMeters: spacingMeters,
-      orientationDegrees: orientationDegrees,
     );
   }
 
@@ -181,16 +144,14 @@ class _JobMap extends StatelessWidget {
         LatLng(point.latitude, point.longitude),
     ];
 
-    return FlutterMap(
+    return RepaintBoundary(
+      child: FlutterMap(
       mapController: controller,
       options: MapOptions(
-        initialCenter: drone ?? (boundary.isEmpty ? _mapCenter : boundary.first),
+        initialCenter: drone ?? (boundary.isEmpty ? defaultMapCenter : boundary.first),
         initialZoom: 17,
         onMapReady: () => _frame(boundary),
-        interactionOptions: InteractionOptions(
-          flags: InteractiveFlag.all & ~InteractiveFlag.rotate,
-          cursorKeyboardRotationOptions: CursorKeyboardRotationOptions.disabled(),
-        ),
+        interactionOptions: mapGestureOptions(),
       ),
       children: [
         const MapTileLayer(),
@@ -214,7 +175,6 @@ class _JobMap extends StatelessWidget {
               activeSplit: mission.activeSplit,
             ),
             simplificationTolerance: 0,
-            cullingMargin: null,
           ),
         ...obstacleMapLayers(obstacles: mission.obstacles),
         ...waypointPathMarkers(
@@ -242,6 +202,7 @@ class _JobMap extends StatelessWidget {
             ],
           ),
       ],
+      ),
     );
   }
 

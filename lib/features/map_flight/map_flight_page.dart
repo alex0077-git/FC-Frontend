@@ -10,7 +10,6 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:latlong2/latlong.dart';
 
-const _mapCenter = LatLng(12.9716, 77.5946);
 const _landingPoint = LatLng(12.9700, 77.5930);
 
 class MapFlightPage extends ConsumerStatefulWidget {
@@ -202,7 +201,7 @@ class _FlightMap extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final satellite = ref.watch(mapViewModeProvider) == MapViewMode.satellite;
     return FlutterMap(
-      options: const MapOptions(initialCenter: _mapCenter, initialZoom: 17),
+      options: const MapOptions(initialCenter: defaultMapCenter, initialZoom: 17),
       children: [
         const MapTileLayer(),
         if (telemetry != null)
@@ -278,7 +277,7 @@ class _TelemetryCards extends StatelessWidget {
       ),
       (
         label: 'Distance to Drone',
-        value: drone == null ? '--' : _formatMeters(_mapCenter, drone),
+        value: drone == null ? '--' : _formatMeters(defaultMapCenter, drone),
       ),
       (
         label: 'Distance to Landing Point',

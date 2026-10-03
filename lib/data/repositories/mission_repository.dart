@@ -1,7 +1,10 @@
 import 'dart:async';
 import 'dart:math';
 
+import 'package:fc_frontend/core/geometry/boundary_orientation.dart';
 import 'package:fc_frontend/core/geometry/boundary_split.dart';
+import 'package:fc_frontend/core/geometry/local_meters.dart';
+import 'package:fc_frontend/core/geometry/polygon_inset.dart';
 import 'package:fc_frontend/data/models/boundary_edit.dart';
 import 'package:fc_frontend/data/models/boundary_point.dart';
 import 'package:fc_frontend/data/models/coverage_line.dart';
@@ -9,11 +12,14 @@ import 'package:fc_frontend/data/models/flight_log.dart';
 import 'package:fc_frontend/data/models/mission.dart';
 import 'package:fc_frontend/data/models/obstacle.dart';
 import 'package:fc_frontend/data/models/waypoint.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:flutter_riverpod/legacy.dart';
 import 'package:latlong2/latlong.dart';
 
 const maxCoverageLines = 2000;
 const minLineSpacingMeters = 1.0;
+const defaultCoverageMarginMeters = 2.0;
+const maxCoverageMarginMeters = 20.0;
 
 class MissionState {
   const MissionState({
@@ -24,6 +30,7 @@ class MissionState {
     this.savedMissions = const [],
     this.spacingMeters = 1,
     this.orientationDegrees = 0,
+    this.marginMeters = defaultCoverageMarginMeters,
     this.undoHistory = const [],
     this.redoHistory = const [],
     this.splits = const [],
@@ -43,6 +50,9 @@ class MissionState {
   final List<Mission> savedMissions;
   final double spacingMeters;
   final double orientationDegrees;
+
+  /// How far inside the drawn boundary the spray lines must stay.
+  final double marginMeters;
   final List<BoundaryEdit> undoHistory;
   final List<BoundaryEdit> redoHistory;
   final List<SplitCut> splits;
@@ -68,6 +78,7 @@ class MissionState {
     List<Mission>? savedMissions,
     double? spacingMeters,
     double? orientationDegrees,
+    double? marginMeters,
     List<BoundaryEdit>? undoHistory,
     List<BoundaryEdit>? redoHistory,
     List<SplitCut>? splits,
@@ -84,6 +95,7 @@ class MissionState {
       savedMissions: savedMissions ?? this.savedMissions,
       spacingMeters: spacingMeters ?? this.spacingMeters,
       orientationDegrees: orientationDegrees ?? this.orientationDegrees,
+      marginMeters: marginMeters ?? this.marginMeters,
       undoHistory: undoHistory ?? this.undoHistory,
       redoHistory: redoHistory ?? this.redoHistory,
       splits: splits ?? this.splits,
@@ -103,8 +115,10 @@ class MissionRepository extends StateNotifier<MissionState> {
 
   int _sequence = 0;
   Timer? _coverageTimer;
+  bool _coverageQueued = false;
   double? _pendingSpacing;
   double? _pendingOrientation;
+  double? _pendingMargin;
   bool _closed = false;
 
   @override
@@ -284,63 +298,63 @@ class MissionRepository extends StateNotifier<MissionState> {
   }
 
   void updateObstacleRadius(String id, double newRadius) {
-    final index = state.obstacles.indexWhere((obstacle) => obstacle.id == id);
-    if (index == -1) {
-      return;
-    }
-    final current = state.obstacles[index];
-    if (current.type != ObstacleType.circle || current.center == null) {
-      return;
-    }
-    final radius = newRadius
-        .clamp(Obstacle.minSizeMeters, Obstacle.maxSizeMeters)
-        .toDouble();
-    if (current.radiusMeters == radius) {
-      return;
-    }
-    _setObstacles([
-      for (final obstacle in state.obstacles)
-        if (obstacle.id == id)
-          Obstacle(
-            id: id,
-            type: ObstacleType.circle,
-            center: current.center,
-            radiusMeters: radius,
-          )
-        else
-          obstacle,
-    ]);
+    _replaceMatchedObstacle(id, (current) {
+      if (current.type != ObstacleType.circle || current.center == null) {
+        return null;
+      }
+      final radius = newRadius
+          .clamp(Obstacle.minSizeMeters, Obstacle.maxSizeMeters)
+          .toDouble();
+      if (current.radiusMeters == radius) {
+        return null;
+      }
+      return Obstacle(
+        id: id,
+        type: ObstacleType.circle,
+        center: current.center,
+        radiusMeters: radius,
+      );
+    });
   }
 
   void updateObstacleSide(String id, double sideMeters) {
+    _replaceMatchedObstacle(id, (current) {
+      if (current.type != ObstacleType.square ||
+          current.center == null ||
+          current.finalized) {
+        return null;
+      }
+      final side = sideMeters
+          .clamp(Obstacle.minSizeMeters, Obstacle.maxSizeMeters)
+          .toDouble();
+      if (current.sideMeters == side) {
+        return null;
+      }
+      return Obstacle(
+        id: id,
+        type: ObstacleType.square,
+        center: current.center,
+        sideMeters: side,
+        finalized: false,
+      );
+    });
+  }
+
+  void _replaceMatchedObstacle(
+    String id,
+    Obstacle? Function(Obstacle current) update,
+  ) {
     final index = state.obstacles.indexWhere((obstacle) => obstacle.id == id);
     if (index == -1) {
       return;
     }
-    final current = state.obstacles[index];
-    if (current.type != ObstacleType.square ||
-        current.center == null ||
-        current.finalized) {
-      return;
-    }
-    final side = sideMeters
-        .clamp(Obstacle.minSizeMeters, Obstacle.maxSizeMeters)
-        .toDouble();
-    if (current.sideMeters == side) {
+    final next = update(state.obstacles[index]);
+    if (next == null) {
       return;
     }
     _setObstacles([
       for (final obstacle in state.obstacles)
-        if (obstacle.id == id)
-          Obstacle(
-            id: id,
-            type: ObstacleType.square,
-            center: current.center,
-            sideMeters: side,
-            finalized: false,
-          )
-        else
-          obstacle,
+        if (obstacle.id == id) next else obstacle,
     ]);
   }
 
@@ -360,7 +374,7 @@ class MissionRepository extends StateNotifier<MissionState> {
       return;
     }
     _replaceObstacle(
-      _obstacleAt(current, _shiftByMeters(center, eastMeters, northMeters)),
+      _obstacleAt(current, shiftByMeters(center, eastMeters, northMeters)),
     );
   }
 
@@ -371,7 +385,7 @@ class MissionRepository extends StateNotifier<MissionState> {
     if (current == null || currentCenter == null) {
       return;
     }
-    if (_sameLatLng(currentCenter, center)) {
+    if (sameLatLng(currentCenter, center)) {
       return;
     }
     _replaceObstacle(_obstacleAt(current, center));
@@ -407,10 +421,7 @@ class MissionRepository extends StateNotifier<MissionState> {
     if (state.coverageLines.isEmpty || state.boundaryPoints.length < 3) {
       return;
     }
-    scheduleCoverage(
-      spacingMeters: state.spacingMeters,
-      orientationDegrees: state.orientationDegrees,
-    );
+    scheduleCoverage();
   }
 
   void saveObstacle(String id) {
@@ -572,31 +583,82 @@ class MissionRepository extends StateNotifier<MissionState> {
   Future<void> generateCoverage({
     required double spacingMeters,
     required double orientationDegrees,
+    double? marginMeters,
   }) async {
     _coverageTimer?.cancel();
     _coverageTimer = null;
     _pendingSpacing = null;
     _pendingOrientation = null;
-    _publishNow(spacingMeters, orientationDegrees);
+    _pendingMargin = null;
+    _publishNow(
+      spacingMeters,
+      orientationDegrees,
+      marginMeters: marginMeters == null ? null : _clampMargin(marginMeters),
+    );
     if (state.coverageLines.isNotEmpty) {
       state = state.copyWith(boundaryEditingLocked: true);
     }
   }
 
-  /// Applies the latest spacing and line angle. The first call paints
-  /// immediately; later calls during a drag replace that pending angle.
+  /// Applies the latest spacing and line angle. The joystick draws its own
+  /// knob while this runs, so a drag does not rebuild the map on every degree.
+  /// The coverage lines follow on the next frame, then at most every 50
+  /// milliseconds until the finger stops.
+  /// Stores the edge gap and rebuilds the spray lines with the same spacing
+  /// and angle.
+  void setCoverageMargin(double marginMeters) {
+    final margin = _clampMargin(marginMeters);
+    if (state.coverageLines.isEmpty || state.boundaryPoints.length < 3) {
+      state = state.copyWith(marginMeters: margin);
+      return;
+    }
+    scheduleCoverage(marginMeters: margin);
+  }
+
+  /// Turns the spray lines so they run along the longest side of the field.
+  /// The joystick can still change the angle afterwards.
+  void alignCoverageToLongestEdge() {
+    if (state.boundaryPoints.length < 2) {
+      return;
+    }
+    final degrees = longestEdgeOrientationDegrees(_ringOf(state.boundaryPoints));
+    state = state.copyWith(orientationDegrees: degrees);
+    if (state.boundaryPoints.length < 3) {
+      return;
+    }
+    scheduleCoverage(orientationDegrees: degrees);
+  }
+
   void scheduleCoverage({
-    required double spacingMeters,
-    required double orientationDegrees,
+    double? spacingMeters,
+    double? orientationDegrees,
+    double? marginMeters,
   }) {
-    _pendingSpacing = spacingMeters;
-    _pendingOrientation = orientationDegrees;
-    if (_coverageTimer != null) {
+    if (spacingMeters != null) {
+      _pendingSpacing = spacingMeters;
+    }
+    if (orientationDegrees != null) {
+      _pendingOrientation = orientationDegrees;
+    }
+    if (marginMeters != null) {
+      _pendingMargin = _clampMargin(marginMeters);
+    }
+    _pendingSpacing ??= state.spacingMeters;
+    _pendingOrientation ??= state.orientationDegrees;
+    if (_coverageTimer != null || _coverageQueued) {
       return;
     }
 
-    _publishPending();
-    _armCoverageCooldown();
+    _coverageQueued = true;
+    SchedulerBinding.instance.scheduleFrame();
+    SchedulerBinding.instance.addPostFrameCallback((_) {
+      _coverageQueued = false;
+      if (_closed) {
+        return;
+      }
+      _publishPending();
+      _armCoverageCooldown();
+    });
   }
 
   void _armCoverageCooldown() {
@@ -613,15 +675,21 @@ class MissionRepository extends StateNotifier<MissionState> {
   void _publishPending() {
     final spacing = _pendingSpacing;
     final orientation = _pendingOrientation;
+    final margin = _pendingMargin;
     if (spacing == null || orientation == null) {
       return;
     }
     _pendingSpacing = null;
     _pendingOrientation = null;
-    _publishNow(spacing, orientation);
+    _pendingMargin = null;
+    _publishNow(spacing, orientation, marginMeters: margin);
   }
 
-  void _publishNow(double spacingMeters, double orientationDegrees) {
+  void _publishNow(
+    double spacingMeters,
+    double orientationDegrees, {
+    double? marginMeters,
+  }) {
     if (!spacingMeters.isFinite || spacingMeters <= 0) {
       throw ArgumentError.value(
         spacingMeters,
@@ -640,6 +708,7 @@ class MissionRepository extends StateNotifier<MissionState> {
             10)
         .clamp(lower, upper)
         .toDouble();
+    final margin = marginMeters ?? state.marginMeters;
     final sample = _requestFromState(
       spacingMeters: spacing,
       orientationDegrees: orientationDegrees,
@@ -651,15 +720,22 @@ class MissionRepository extends StateNotifier<MissionState> {
     final routeBreaks = <bool>[];
     final paths = <List<LatLng>>[];
     final pathSections = <int>[];
+    final pathPumps = <List<bool>>[];
+    final planningSections = <List<LatLng>>[];
     final loopedObstacles = <String>{};
     var blockedByObstacle = false;
     for (var sectionIndex = 0; sectionIndex < sections.length; sectionIndex++) {
       final section = sections[sectionIndex];
+      final planning = margin <= 0 ? section : insetPolygon(section, margin);
+      planningSections.add(planning.length >= 3 ? planning : const []);
+      if (planningSections.last.length < 3) {
+        continue;
+      }
       final geometry = _coverageGeometry(
         _CoverageRequest(
-          latitudes: [for (final point in section) point.latitude],
-          longitudes: [for (final point in section) point.longitude],
-          orders: [for (var index = 0; index < section.length; index++) index],
+          latitudes: [for (final point in planning) point.latitude],
+          longitudes: [for (final point in planning) point.longitude],
+          orders: [for (var index = 0; index < planning.length; index++) index],
           spacingMeters: spacing,
           orientationDegrees: orientationDegrees,
           altitude: sample.altitude,
@@ -692,6 +768,7 @@ class MissionRepository extends StateNotifier<MissionState> {
               lines: lines,
               paths: paths,
               pathSections: pathSections,
+              pathPumps: pathPumps,
               loopedObstacles: loopedObstacles,
             );
             if (_joinsAtStart(piece.$1, piece.$2, resume)) {
@@ -709,6 +786,7 @@ class MissionRepository extends StateNotifier<MissionState> {
                 lines: lines,
                 paths: paths,
                 pathSections: pathSections,
+                pathPumps: pathPumps,
                 loopedObstacles: loopedObstacles,
               );
               if (_joinsAtStart(piece.$1, piece.$2, resume)) {
@@ -728,21 +806,34 @@ class MissionRepository extends StateNotifier<MissionState> {
           _extendCoveragePath(
             paths: paths,
             pathSections: pathSections,
+            pathPumps: pathPumps,
             start: pieceStart,
             end: piece.$2,
             sectionIndex: sectionIndex,
             startsRoute: startsRoute,
+            pumpOn: true,
           );
           breakNext = false;
           previousEnd = piece.$2;
         }
       }
     }
+    _keepRoutesInside(
+      sections: sections,
+      paths: paths,
+      pathSections: pathSections,
+      pathPumps: pathPumps,
+      lines: lines,
+      sectionIndexes: sectionIndexes,
+      routeBreaks: routeBreaks,
+    );
     final waypointLatitudes = <double>[];
     final waypointLongitudes = <double>[];
     final waypointSections = <int>[];
+    final waypointPumps = <bool>[];
     for (var pathIndex = 0; pathIndex < paths.length; pathIndex++) {
       final path = paths[pathIndex];
+      final pumps = pathPumps[pathIndex];
       for (var pointIndex = 0; pointIndex + 1 < path.length; pointIndex++) {
         _appendWaypoints(
           path[pointIndex],
@@ -750,14 +841,17 @@ class MissionRepository extends StateNotifier<MissionState> {
           waypointLatitudes,
           waypointLongitudes,
           waypointSections,
+          waypointPumps,
           pathSections[pathIndex],
           _pathEntersObstacle,
           includeStart: pointIndex == 0,
+          pumpOn: pointIndex < pumps.length ? pumps[pointIndex] : true,
         );
       }
     }
     _publishCoverage(
       sample,
+      marginMeters: margin,
       _CoverageGeometry(
         lines: lines,
         paths: [
@@ -765,11 +859,13 @@ class MissionRepository extends StateNotifier<MissionState> {
             CoveragePath(
               points: List.unmodifiable(paths[index]),
               sectionIndex: pathSections[index],
+              pumpOn: List.unmodifiable(pathPumps[index]),
             ),
         ],
         waypointLatitudes: waypointLatitudes,
         waypointLongitudes: waypointLongitudes,
         waypointSections: waypointSections,
+        waypointPumpOn: waypointPumps,
         sectionIndexes: sectionIndexes,
         routeBreaks: routeBreaks,
       ),
@@ -785,6 +881,7 @@ class MissionRepository extends StateNotifier<MissionState> {
     required List<List<double>> lines,
     required List<List<LatLng>> paths,
     required List<int> pathSections,
+    required List<List<bool>> pathPumps,
     required Set<String> loopedObstacles,
   }) {
     final blocker = _obstacleBetween(from, to);
@@ -807,10 +904,12 @@ class MissionRepository extends StateNotifier<MissionState> {
       _extendCoveragePath(
         paths: paths,
         pathSections: pathSections,
+        pathPumps: pathPumps,
         start: route[index],
         end: route[index + 1],
         sectionIndex: sectionIndex,
         startsRoute: false,
+        pumpOn: false,
       );
     }
     return route.last;
@@ -849,6 +948,7 @@ class MissionRepository extends StateNotifier<MissionState> {
     required List<List<double>> lines,
     required List<List<LatLng>> paths,
     required List<int> pathSections,
+    required List<List<bool>> pathPumps,
     required Set<String> loopedObstacles,
   }) {
     if (link.isEmpty) {
@@ -860,6 +960,7 @@ class MissionRepository extends StateNotifier<MissionState> {
         lines: lines,
         paths: paths,
         pathSections: pathSections,
+        pathPumps: pathPumps,
         loopedObstacles: loopedObstacles,
       );
     }
@@ -876,6 +977,7 @@ class MissionRepository extends StateNotifier<MissionState> {
           lines: lines,
           paths: paths,
           pathSections: pathSections,
+          pathPumps: pathPumps,
           loopedObstacles: loopedObstacles,
         );
         if (_joinsAtStart(part.$1, part.$2, resume)) {
@@ -885,10 +987,12 @@ class MissionRepository extends StateNotifier<MissionState> {
       _extendCoveragePath(
         paths: paths,
         pathSections: pathSections,
+        pathPumps: pathPumps,
         start: partStart,
         end: part.$2,
         sectionIndex: sectionIndex,
         startsRoute: false,
+        pumpOn: true,
       );
       cursor = part.$2;
     }
@@ -1004,6 +1108,16 @@ class MissionRepository extends StateNotifier<MissionState> {
     return span;
   }
 
+  static double _clampMargin(double marginMeters) {
+    if (!marginMeters.isFinite || marginMeters <= 0) {
+      return 0;
+    }
+    if (marginMeters > maxCoverageMarginMeters) {
+      return maxCoverageMarginMeters;
+    }
+    return marginMeters;
+  }
+
   static double lineSpacingLowerBound(List<BoundaryPoint> points) {
     final upper = lineSpacingUpperBound(points);
     return min(minLineSpacingMeters, upper);
@@ -1061,6 +1175,7 @@ class MissionRepository extends StateNotifier<MissionState> {
     _CoverageRequest request,
     _CoverageGeometry geometry, {
     required bool blockedByObstacle,
+    required double marginMeters,
   }) {
     final action = WaypointAction.values[request.actionIndex];
     final lines = <CoverageLine>[
@@ -1098,6 +1213,9 @@ class MissionRepository extends StateNotifier<MissionState> {
           sectionIndex: index < geometry.waypointSections.length
               ? geometry.waypointSections[index]
               : 0,
+          pumpOn: index < geometry.waypointPumpOn.length
+              ? geometry.waypointPumpOn[index]
+              : true,
         ),
       );
     }
@@ -1107,6 +1225,7 @@ class MissionRepository extends StateNotifier<MissionState> {
       waypoints: List.unmodifiable(waypoints),
       spacingMeters: request.spacingMeters,
       orientationDegrees: request.orientationDegrees,
+      marginMeters: marginMeters,
       coverageBlockedByObstacle: blocked,
     );
   }
@@ -1240,6 +1359,7 @@ class _CoverageGeometry {
     this.paths = const [],
     this.sectionIndexes = const [],
     this.waypointSections = const [],
+    this.waypointPumpOn = const [],
     this.routeBreaks = const [],
   });
 
@@ -1251,6 +1371,7 @@ class _CoverageGeometry {
   final List<double> waypointLatitudes;
   final List<double> waypointLongitudes;
   final List<int> waypointSections;
+  final List<bool> waypointPumpOn;
 }
 
 class _LocalPoint {
@@ -1468,12 +1589,11 @@ _LocalPoint _toLocal(
   double originLatitude,
   double originLongitude,
 ) {
-  const metersPerDegree = 111320.0;
-  final longitudeScale = metersPerDegree * _cosineDegrees(originLatitude);
-  return _LocalPoint(
-    (longitude - originLongitude) * longitudeScale,
-    (latitude - originLatitude) * metersPerDegree,
+  final local = toLocalMeters(
+    LatLng(latitude, longitude),
+    LatLng(originLatitude, originLongitude),
   );
+  return _LocalPoint(local.east, local.north);
 }
 
 LatLng _fromLocal(
@@ -1481,11 +1601,9 @@ LatLng _fromLocal(
   double originLatitude,
   double originLongitude,
 ) {
-  const metersPerDegree = 111320.0;
-  final longitudeScale = metersPerDegree * _cosineDegrees(originLatitude);
-  return LatLng(
-    originLatitude + point.y / metersPerDegree,
-    originLongitude + point.x / longitudeScale,
+  return fromLocalMeters(
+    LocalMeters(point.x, point.y),
+    LatLng(originLatitude, originLongitude),
   );
 }
 
@@ -1545,36 +1663,143 @@ List<double> _horizontalCrossings(List<_LocalPoint> polygon, double y) {
   return unique;
 }
 
-const _metersPerDegree = 111320.0;
+/// Pulls every published route back inside its field section. A straight
+/// pass, a turn, or an obstacle bend that would leave is replaced by the
+/// boundary edge between the exit and the return.
+void _keepRoutesInside({
+  required List<List<LatLng>> sections,
+  required List<List<LatLng>> paths,
+  required List<int> pathSections,
+  required List<List<bool>> pathPumps,
+  required List<List<double>> lines,
+  required List<int> sectionIndexes,
+  required List<bool> routeBreaks,
+}) {
+  final keptPaths = <List<LatLng>>[];
+  final keptPathSections = <int>[];
+  final keptPumps = <List<bool>>[];
+  for (var index = 0; index < paths.length; index++) {
+    final section = _sectionAt(sections, pathSections[index]);
+    final points = paths[index];
+    final pumps = index < pathPumps.length ? pathPumps[index] : const <bool>[];
+    final clipped = section == null ? points : pathInsideBoundary(points, section);
+    if (clipped.length < 2) {
+      continue;
+    }
+    keptPaths.add(clipped);
+    keptPathSections.add(pathSections[index]);
+    keptPumps.add(_pumpsForClippedPath(points, pumps, clipped));
+  }
+  paths
+    ..clear()
+    ..addAll(keptPaths);
+  pathSections
+    ..clear()
+    ..addAll(keptPathSections);
+  pathPumps
+    ..clear()
+    ..addAll(keptPumps);
 
-LatLng _shiftByMeters(LatLng origin, double eastMeters, double northMeters) {
-  final scale = _metersPerDegree * cos(origin.latitude * pi / 180);
-  return LatLng(
-    origin.latitude + northMeters / _metersPerDegree,
-    origin.longitude + eastMeters / scale,
-  );
+  final keptLines = <List<double>>[];
+  final keptSections = <int>[];
+  final keptBreaks = <bool>[];
+  for (var index = 0; index < lines.length; index++) {
+    final line = lines[index];
+    final section = _sectionAt(sections, sectionIndexes[index]);
+    final clipped = section == null
+        ? <LatLng>[
+            LatLng(line[0], line[1]),
+            LatLng(line[2], line[3]),
+          ]
+        : pathInsideBoundary(
+            [
+              LatLng(line[0], line[1]),
+              LatLng(line[2], line[3]),
+            ],
+            section,
+          );
+    for (var point = 0; point + 1 < clipped.length; point++) {
+      keptLines.add([
+        clipped[point].latitude,
+        clipped[point].longitude,
+        clipped[point + 1].latitude,
+        clipped[point + 1].longitude,
+      ]);
+      keptSections.add(sectionIndexes[index]);
+      keptBreaks.add(point == 0 && routeBreaks[index]);
+    }
+  }
+  lines
+    ..clear()
+    ..addAll(keptLines);
+  sectionIndexes
+    ..clear()
+    ..addAll(keptSections);
+  routeBreaks
+    ..clear()
+    ..addAll(keptBreaks);
 }
 
-(double, double) offsetMeters(LatLng origin, LatLng current) {
-  final scale = _metersPerDegree * cos(origin.latitude * pi / 180);
-  return (
-    (current.longitude - origin.longitude) * scale,
-    (current.latitude - origin.latitude) * _metersPerDegree,
-  );
+List<LatLng>? _sectionAt(List<List<LatLng>> sections, int index) {
+  if (index < 0 || index >= sections.length || sections[index].length < 3) {
+    return null;
+  }
+  return sections[index];
 }
 
-bool _sameLatLng(LatLng a, LatLng b) {
-  return (a.latitude - b.latitude).abs() < 1e-10 &&
-      (a.longitude - b.longitude).abs() < 1e-10;
+List<bool> _pumpsForClippedPath(
+  List<LatLng> original,
+  List<bool> pumps,
+  List<LatLng> clipped,
+) {
+  if (original.length < 2) {
+    return List<bool>.filled(clipped.length - 1, true);
+  }
+  return [
+    for (var index = 0; index + 1 < clipped.length; index++)
+      _pumpOnNear(
+        original,
+        pumps,
+        LatLng(
+          (clipped[index].latitude + clipped[index + 1].latitude) / 2,
+          (clipped[index].longitude + clipped[index + 1].longitude) / 2,
+        ),
+      ),
+  ];
+}
+
+bool _pumpOnNear(List<LatLng> original, List<bool> pumps, LatLng point) {
+  var best = double.infinity;
+  var sprays = true;
+  final local = toLocalMeters(point, original.first);
+  for (var index = 0; index + 1 < original.length; index++) {
+    final start = toLocalMeters(original[index], original.first);
+    final end = toLocalMeters(original[index + 1], original.first);
+    final distance = distanceToSegmentMeters(
+      pointEast: local.east,
+      pointNorth: local.north,
+      startEast: start.east,
+      startNorth: start.north,
+      endEast: end.east,
+      endNorth: end.north,
+    );
+    if (distance < best) {
+      best = distance;
+      sprays = index < pumps.length ? pumps[index] : true;
+    }
+  }
+  return sprays;
 }
 
 void _extendCoveragePath({
   required List<List<LatLng>> paths,
   required List<int> pathSections,
+  required List<List<bool>> pathPumps,
   required LatLng start,
   required LatLng end,
   required int sectionIndex,
   required bool startsRoute,
+  required bool pumpOn,
 }) {
   final continues = !startsRoute &&
       paths.isNotEmpty &&
@@ -1582,40 +1807,48 @@ void _extendCoveragePath({
   if (!continues) {
     paths.add([start, end]);
     pathSections.add(sectionIndex);
+    pathPumps.add([pumpOn]);
     return;
   }
 
   final path = paths.last;
-  if (!_sameMapPoint(path.last, start)) {
-    _addPathPoint(path, start);
+  final pumps = pathPumps.last;
+  if (!sameLatLng(path.last, start)) {
+    _addPathPoint(path, pumps, start, pumpOn);
   }
-  _addPathPoint(path, end);
+  _addPathPoint(path, pumps, end, pumpOn);
 }
 
-void _addPathPoint(List<LatLng> path, LatLng point) {
-  if (path.isNotEmpty && _sameMapPoint(path.last, point)) {
+void _addPathPoint(
+  List<LatLng> path,
+  List<bool> pumps,
+  LatLng point,
+  bool pumpOn,
+) {
+  if (path.isNotEmpty && sameLatLng(path.last, point)) {
     return;
   }
   if (path.length >= 2 &&
+      pumps.isNotEmpty &&
+      pumps.last == pumpOn &&
       _runsStraight(path[path.length - 2], path.last, point)) {
     path[path.length - 1] = point;
     return;
   }
   path.add(point);
+  pumps.add(pumpOn);
 }
 
 bool _runsStraight(LatLng start, LatLng middle, LatLng end) {
   // True when [middle] already lies on the straight segment from [start] to
   // [end]. A summed length hides a corner when one leg is very short, and
   // dropping that corner lets the path cut into the no-fly zone.
-  const metersPerDegree = 111320.0;
-  final scale = metersPerDegree * cos(start.latitude * pi / 180);
-  double east(LatLng point) => (point.longitude - start.longitude) * scale;
-  double north(LatLng point) => (point.latitude - start.latitude) * metersPerDegree;
-  final endEast = east(end);
-  final endNorth = north(end);
-  final midEast = east(middle);
-  final midNorth = north(middle);
+  final endLocal = toLocalMeters(end, start);
+  final midLocal = toLocalMeters(middle, start);
+  final endEast = endLocal.east;
+  final endNorth = endLocal.north;
+  final midEast = midLocal.east;
+  final midNorth = midLocal.north;
   final lengthSquared = endEast * endEast + endNorth * endNorth;
   if (lengthSquared < 1e-8) {
     return midEast * midEast + midNorth * midNorth <= 0.0004;
@@ -1629,20 +1862,17 @@ bool _runsStraight(LatLng start, LatLng middle, LatLng end) {
   return offEast * offEast + offNorth * offNorth <= 0.0004;
 }
 
-bool _sameMapPoint(LatLng a, LatLng b) {
-  return (a.latitude - b.latitude).abs() <= 1e-9 &&
-      (a.longitude - b.longitude).abs() <= 1e-9;
-}
-
 bool _appendWaypoints(
   LatLng start,
   LatLng end,
   List<double> latitudes,
   List<double> longitudes,
   List<int> sections,
+  List<bool> pumps,
   int sectionIndex,
   bool Function(LatLng point) blocked, {
   bool includeStart = true,
+  bool pumpOn = true,
 }) {
   const intervalMeters = 12.0;
   const interiorBudget = 2500;
@@ -1667,14 +1897,8 @@ bool _appendWaypoints(
     latitudes.add(point.latitude);
     longitudes.add(point.longitude);
     sections.add(sectionIndex);
+    pumps.add(pumpOn);
   }
   return droppedInside;
 }
 
-double _cosineDegrees(double degrees) {
-  final scale = cos(degrees * pi / 180).abs();
-  if (scale < 1e-6) {
-    return 1e-6;
-  }
-  return scale;
-}

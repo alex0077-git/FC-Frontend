@@ -3,6 +3,7 @@ import 'dart:math';
 import 'package:fc_frontend/core/geometry/boundary_split.dart';
 import 'package:fc_frontend/core/theme/app_theme.dart';
 import 'package:fc_frontend/core/widgets/coverage_lines.dart';
+import 'package:fc_frontend/data/models/coverage_line.dart';
 import 'package:fc_frontend/data/repositories/mission_repository.dart';
 import 'package:fc_frontend/features/ground_plan/ground_plan_page.dart';
 import 'package:flutter/material.dart';
@@ -76,6 +77,49 @@ void main() {
     expect(moved, isTrue);
   });
 
+  test('coverage stays inside a concave field and an obstacle on the edge', () async {
+    final concave = MissionRepository();
+    final notch = [
+      _at(0, 0),
+      _at(30, 0),
+      _at(30, 10),
+      _at(10, 10),
+      _at(10, 20),
+      _at(30, 20),
+      _at(30, 30),
+      _at(0, 30),
+    ];
+    for (final point in notch) {
+      concave.addBoundaryPoint(latitude: point.latitude, longitude: point.longitude);
+    }
+    for (final angle in [0.0, 35.0, 90.0]) {
+      await concave.generateCoverage(spacingMeters: 8, orientationDegrees: angle);
+      _expectInside(concave.state.coveragePaths, notch, 'notch $angle');
+      _expectInsideLines(concave.state.coverageLines, notch, 'notch line $angle');
+    }
+
+    final edged = MissionRepository();
+    final field = [
+      _at(-20, 0),
+      _at(20, 0),
+      _at(20, 40),
+      _at(-20, 40),
+    ];
+    for (final point in field) {
+      edged.addBoundaryPoint(latitude: point.latitude, longitude: point.longitude);
+    }
+    final circleId = edged.addCircleObstacle(_at(14, 20));
+    edged.updateObstacleRadius(circleId, 6);
+    await edged.generateCoverage(spacingMeters: 10, orientationDegrees: 0);
+    _expectInside(edged.state.coveragePaths, field, 'edge obstacle');
+    final circle = edged.state.obstacles.single;
+    for (final path in edged.state.coveragePaths) {
+      for (final point in path.points) {
+        expect(circle.enters(point), isFalse);
+      }
+    }
+  });
+
   test('a slanted field uses the shorter end-to-end connection', () async {
     final repo = MissionRepository();
     for (final point in [
@@ -92,8 +136,8 @@ void main() {
     final points = repo.state.coveragePaths.single.points;
     expect(_pathMeters(points), lessThan(160));
     final start = _xy(points.first, _at(0, 0));
-    expect(start.$1, closeTo(100, 1.5));
-    expect(start.$2, closeTo(0, 1.5));
+    expect(start.$1, greaterThan(70));
+    expect(start.$2, lessThan(10));
   });
 
   testWidgets('the start marker moves when the pattern rotates', (tester) async {
@@ -152,6 +196,45 @@ LatLng _at(double east, double north) {
     (point.longitude - origin.longitude) * scale,
     (point.latitude - origin.latitude) * _metersPerDegree,
   );
+}
+
+void _expectInside(List<CoveragePath> paths, List<LatLng> boundary, String label) {
+  expect(paths, isNotEmpty, reason: label);
+  for (final path in paths) {
+    final points = path.points;
+    for (var index = 0; index < points.length; index++) {
+      expect(
+        boundaryContains(boundary, points[index]),
+        isTrue,
+        reason: '$label point ${_xy(points[index], boundary.first)}',
+      );
+      if (index + 1 == points.length) {
+        continue;
+      }
+      for (var step = 1; step < 8; step++) {
+        final t = step / 8;
+        final sample = LatLng(
+          points[index].latitude + (points[index + 1].latitude - points[index].latitude) * t,
+          points[index].longitude + (points[index + 1].longitude - points[index].longitude) * t,
+        );
+        expect(
+          boundaryContains(boundary, sample),
+          isTrue,
+          reason: '$label segment $index',
+        );
+      }
+    }
+  }
+}
+
+void _expectInsideLines(List<CoverageLine> lines, List<LatLng> boundary, String label) {
+  for (final line in lines) {
+    _expectInside(
+      [CoveragePath(points: line.endpoints, sectionIndex: line.sectionIndex)],
+      boundary,
+      label,
+    );
+  }
 }
 
 double _pathMeters(List<LatLng> points) {

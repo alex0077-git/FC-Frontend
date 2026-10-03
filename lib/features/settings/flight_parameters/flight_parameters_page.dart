@@ -24,13 +24,13 @@ class _FlightParametersPageState extends ConsumerState<FlightParametersPage> {
   void initState() {
     super.initState();
     final parameters = ref.read(flightParametersProvider);
-    _maxYawRate = TextEditingController(text: _format(parameters.maxYawRate));
-    _maxRollAngle = TextEditingController(text: _format(parameters.maxRollAngle));
+    _maxYawRate = TextEditingController(text: formatSettingsNumber(parameters.maxYawRate));
+    _maxRollAngle = TextEditingController(text: formatSettingsNumber(parameters.maxRollAngle));
     _maxPitchAngle = TextEditingController(
-      text: _format(parameters.maxPitchAngle),
+      text: formatSettingsNumber(parameters.maxPitchAngle),
     );
-    _maxSpeed = TextEditingController(text: _format(parameters.maxSpeed));
-    _cruiseSpeed = TextEditingController(text: _format(parameters.cruiseSpeed));
+    _maxSpeed = TextEditingController(text: formatSettingsNumber(parameters.maxSpeed));
+    _cruiseSpeed = TextEditingController(text: formatSettingsNumber(parameters.cruiseSpeed));
   }
 
   @override
@@ -148,9 +148,3 @@ double? _readRange(
   return value;
 }
 
-String _format(double value) {
-  if (value == value.roundToDouble()) {
-    return value.toStringAsFixed(0);
-  }
-  return value.toString();
-}

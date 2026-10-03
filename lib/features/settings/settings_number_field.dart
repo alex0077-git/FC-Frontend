@@ -1,5 +1,13 @@
 import 'package:flutter/material.dart';
 
+/// Shows a whole number without a trailing ".0".
+String formatSettingsNumber(double value) {
+  if (value == value.roundToDouble()) {
+    return value.toStringAsFixed(0);
+  }
+  return value.toString();
+}
+
 class SettingsNumberField extends StatelessWidget {
   const SettingsNumberField({
     super.key,

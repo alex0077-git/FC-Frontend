@@ -1,8 +1,9 @@
 import 'package:fc_frontend/core/geometry/boundary_split.dart';
+import 'package:fc_frontend/core/geometry/local_meters.dart';
 import 'package:fc_frontend/core/map/map_view.dart';
 import 'package:fc_frontend/core/theme/app_theme.dart';
+import 'package:fc_frontend/core/widgets/coverage_adjust_controls.dart';
 import 'package:fc_frontend/core/widgets/coverage_lines.dart';
-import 'package:fc_frontend/core/widgets/line_spacing_control.dart';
 import 'package:fc_frontend/core/widgets/obstacle_map_layers.dart';
 import 'package:fc_frontend/data/models/boundary_point.dart';
 import 'package:fc_frontend/data/models/flight_log.dart';
@@ -11,7 +12,6 @@ import 'package:fc_frontend/data/models/mission.dart';
 import 'package:fc_frontend/data/models/waypoint.dart';
 import 'package:fc_frontend/data/repositories/mission_repository.dart';
 import 'package:fc_frontend/data/repositories/telemetry_repository.dart';
-import 'package:fc_frontend/core/widgets/joystick_control.dart';
 import 'package:fc_frontend/core/widgets/responsive.dart';
 import 'package:fc_frontend/features/ground_plan/boundary_point_dialog.dart';
 import 'package:fc_frontend/features/ground_plan/boundary_point_marker.dart';
@@ -24,7 +24,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:latlong2/latlong.dart';
 
-const _mapCenter = LatLng(12.9716, 77.5946);
 
 List<LatLng> _boundaryRing(MissionState mission) {
   final ordered = [...mission.boundaryPoints]
@@ -132,28 +131,9 @@ class _GroundPlanPageState extends ConsumerState<GroundPlanPage> {
                         ),
                       ),
                       if (hasCoverage)
-                        Padding(
-                          padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
-                          child: Column(
-                            children: [
-                              JoystickControl(
-                                label: 'Orientation',
-                                degrees: mission.orientationDegrees,
-                                onChanged: _setOrientation,
-                              ),
-                              const SizedBox(height: 8),
-                              LineSpacingControl(
-                                spacingMeters: mission.spacingMeters,
-                                lowerMeters: MissionRepository.lineSpacingLowerBound(
-                                  mission.boundaryPoints,
-                                ),
-                                upperMeters: MissionRepository.lineSpacingUpperBound(
-                                  mission.boundaryPoints,
-                                ),
-                                onChanged: _setSpacing,
-                              ),
-                            ],
-                          ),
+                        const Padding(
+                          padding: EdgeInsets.fromLTRB(12, 0, 12, 8),
+                          child: CoverageAdjustControls(),
                         ),
                       Padding(
                         padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
@@ -763,22 +743,6 @@ class _GroundPlanPageState extends ConsumerState<GroundPlanPage> {
     );
   }
 
-  void _setOrientation(double degrees) {
-    final mission = ref.read(missionRepositoryProvider);
-    ref.read(missionRepositoryProvider.notifier).scheduleCoverage(
-      spacingMeters: mission.spacingMeters,
-      orientationDegrees: degrees,
-    );
-  }
-
-  void _setSpacing(double spacingMeters) {
-    final mission = ref.read(missionRepositoryProvider);
-    ref.read(missionRepositoryProvider.notifier).scheduleCoverage(
-      spacingMeters: spacingMeters,
-      orientationDegrees: mission.orientationDegrees,
-    );
-  }
-
   void _frameBoundary() {
     final points = ref.read(missionRepositoryProvider).boundaryPoints;
     if (points.length < 2) {
@@ -953,18 +917,15 @@ class _PlanMapState extends State<_PlanMap> {
     return Stack(
       fit: StackFit.expand,
       children: [
-        FlutterMap(
+        RepaintBoundary(
+          child: FlutterMap(
           mapController: widget.controller,
           options: MapOptions(
-            initialCenter: _mapCenter,
+            initialCenter: defaultMapCenter,
             initialZoom: 16,
             onTap: widget.onTap,
             onMapReady: widget.onMapReady,
-            interactionOptions: InteractionOptions(
-              flags: InteractiveFlag.all & ~InteractiveFlag.rotate,
-              cursorKeyboardRotationOptions:
-                  CursorKeyboardRotationOptions.disabled(),
-            ),
+            interactionOptions: mapGestureOptions(),
           ),
           children: [
             const MapTileLayer(),
@@ -993,7 +954,6 @@ class _PlanMapState extends State<_PlanMap> {
                   activeSplit: widget.mission.activeSplit,
                 ),
                 simplificationTolerance: 0,
-                cullingMargin: null,
               ),
             if (widget.mission.coverageLines.isEmpty)
               ...waypointPathLine(widget.mission.waypoints),
@@ -1080,6 +1040,7 @@ class _PlanMapState extends State<_PlanMap> {
               activeSplit: widget.mission.activeSplit,
             ),
           ],
+          ),
         ),
         const MapStyleToggle(),
         Positioned(
@@ -1573,7 +1534,8 @@ class _WaypointRow extends StatelessWidget {
       ),
       subtitle: Text(
         '${waypoint.altitude.toStringAsFixed(1)} m · '
-        '${waypoint.speed.toStringAsFixed(1)} m/s',
+        '${waypoint.speed.toStringAsFixed(1)} m/s · '
+        '${waypoint.pumpOn ? 'Spray on' : 'Spray off'}',
         style: TextStyle(color: muted),
       ),
       trailing: Row(
@@ -1620,6 +1582,9 @@ class _WaypointDetail extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         const Text('Waypoint detail'),
+        const SizedBox(height: 8),
+        if (waypoint != null)
+          Text(waypoint!.pumpOn ? 'Spray on' : 'Spray off'),
         const SizedBox(height: 8),
         if (waypoint == null)
           const Text('Select a waypoint')

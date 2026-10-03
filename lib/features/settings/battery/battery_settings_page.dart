@@ -31,11 +31,11 @@ class _BatterySettingsPageState extends ConsumerState<BatterySettingsPage> {
       text: '${settings.secondWarningPercent}',
     );
     _criticalPercent = TextEditingController(text: '${settings.criticalPercent}');
-    _maxVoltage = TextEditingController(text: _format(settings.maxVoltage));
-    _minVoltage = TextEditingController(text: _format(settings.minVoltage));
-    _lowVoltage = TextEditingController(text: _format(settings.lowVoltageThreshold));
+    _maxVoltage = TextEditingController(text: formatSettingsNumber(settings.maxVoltage));
+    _minVoltage = TextEditingController(text: formatSettingsNumber(settings.minVoltage));
+    _lowVoltage = TextEditingController(text: formatSettingsNumber(settings.lowVoltageThreshold));
     _criticalVoltage = TextEditingController(
-      text: _format(settings.criticalVoltageThreshold),
+      text: formatSettingsNumber(settings.criticalVoltageThreshold),
     );
     _cellCount = TextEditingController(text: '${settings.cellCount}');
   }
@@ -234,9 +234,3 @@ int? _readCellCount(String text, Map<String, String> errors) {
   return value;
 }
 
-String _format(double value) {
-  if (value == value.roundToDouble()) {
-    return value.toStringAsFixed(0);
-  }
-  return value.toString();
-}

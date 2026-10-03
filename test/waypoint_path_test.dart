@@ -107,7 +107,7 @@ void main() {
       tester
           .widgetList<PolylineLayer>(find.byType(PolylineLayer))
           .expand((layer) => layer.polylines)
-          .where((line) => line.color == const Color(0xFF22C55E)),
+          .where((line) => line.color == const Color(0xFFFACC15)),
       hasLength(1),
     );
     expect(find.text('S'), findsOneWidget);

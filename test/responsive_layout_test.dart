@@ -48,7 +48,12 @@ void main() {
 
   testWidgets('job execution fits a phone in landscape', (tester) async {
     await pumpPage(tester, const Size(844, 390), const JobExecutionPage());
-    expect(find.text('Next Line', skipOffstage: false), findsOneWidget);
+    await tester.scrollUntilVisible(
+      find.text('Next Line'),
+      80,
+      scrollable: find.byType(Scrollable).last,
+    );
+    expect(find.text('Next Line'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 }

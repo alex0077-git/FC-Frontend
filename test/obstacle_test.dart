@@ -84,7 +84,7 @@ void main() {
     repository.updateObstacleSide(squareId, 30);
     expect(repository.state.obstacles.last.sideMeters, 12);
 
-    await repository.generateCoverage(spacingMeters: 10, orientationDegrees: 0);
+    await repository.generateCoverage(marginMeters: 0, spacingMeters: 10, orientationDegrees: 0);
 
     final lines = repository.state.coverageLines;
     expect(lines, isNotEmpty);
@@ -180,7 +180,7 @@ void main() {
     _addRectangle(repository);
     repository.addCircleObstacle(_at(0, 20));
     repository.updateObstacleRadius(repository.state.obstacles.single.id, 8);
-    await repository.generateCoverage(spacingMeters: 10, orientationDegrees: 0);
+    await repository.generateCoverage(marginMeters: 0, spacingMeters: 10, orientationDegrees: 0);
 
     expect(repository.state.coveragePaths, hasLength(1));
     final points = repository.state.coveragePaths.single.points;
@@ -355,7 +355,7 @@ void main() {
     final circle = repository.state.obstacles.firstWhere(
       (obstacle) => obstacle.id != squareId,
     );
-    await repository.generateCoverage(spacingMeters: 20, orientationDegrees: 0);
+    await repository.generateCoverage(marginMeters: 0, spacingMeters: 20, orientationDegrees: 0);
     await tester.pump();
     final circleBefore = circle.center!;
     await tester.ensureVisible(find.text('Position'));
@@ -416,10 +416,11 @@ void main() {
     _addRectangle(repository);
     final circleId = repository.addCircleObstacle(_at(0, 20));
     repository.updateObstacleRadius(circleId, 8);
-    await repository.generateCoverage(spacingMeters: 10, orientationDegrees: 0);
+    await repository.generateCoverage(marginMeters: 0, spacingMeters: 10, orientationDegrees: 0);
 
     final before = repository.state.obstacles.single.center!;
     repository.moveObstacle(circleId, eastMeters: 0, northMeters: 12);
+    await tester.pump();
     final circle = repository.state.obstacles.single;
     expect(circle.radiusMeters, 8);
     final shift = _xy(circle.center!, before);
@@ -431,6 +432,7 @@ void main() {
 
     await tester.pump(const Duration(milliseconds: 100));
     repository.placeObstacle(circleId, before);
+    await tester.pump();
     final restored = repository.state.obstacles.single;
     expect(_samePoint(restored.center!, before), isTrue);
     expect(restored.radiusMeters, 8);
@@ -444,6 +446,7 @@ void main() {
         .firstWhere((obstacle) => obstacle.id == squareId)
         .center!;
     repository.moveObstacle(squareId, eastMeters: 8, northMeters: 0);
+    await tester.pump();
     final square = repository.state.obstacles.firstWhere(
       (obstacle) => obstacle.id == squareId,
     );
@@ -468,8 +471,9 @@ void main() {
     _addRectangle(repository);
     final id = repository.addCircleObstacle(_at(0, 20));
     repository.updateObstacleRadius(id, 8);
-    await repository.generateCoverage(spacingMeters: 10, orientationDegrees: 0);
+    await repository.generateCoverage(marginMeters: 0, spacingMeters: 10, orientationDegrees: 0);
     repository.moveObstacle(id, eastMeters: 6, northMeters: 0);
+    await tester.pump();
     _expectOutside(repository.state.coveragePaths, repository.state.obstacles.single);
 
     repository.moveObstacle(id, eastMeters: 6, northMeters: 0);

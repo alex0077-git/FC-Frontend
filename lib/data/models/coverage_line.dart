@@ -8,10 +8,15 @@ class CoveragePath {
   const CoveragePath({
     required this.points,
     required this.sectionIndex,
+    this.pumpOn = const [],
   });
 
   final List<LatLng> points;
   final int sectionIndex;
+
+  /// One flag per segment, in flight order. Empty means every segment sprays.
+  /// A false flag is the straight detour around a no-fly zone.
+  final List<bool> pumpOn;
 }
 
 class CoverageLine {

@@ -1,5 +1,6 @@
 import 'dart:math';
 
+import 'package:fc_frontend/core/geometry/local_meters.dart';
 import 'package:latlong2/latlong.dart';
 
 /// The two boundary positions that separate a field into Split A and Split B.
@@ -70,6 +71,84 @@ List<List<LatLng>> boundarySections(List<LatLng> boundary, List<SplitCut> cuts) 
     for (final piece in pieces)
       [for (final point in piece) _fromMeter(point, origin)],
   ];
+}
+
+/// The same route with every stretch that would leave [polygon] replaced by
+/// the shorter walk along the boundary. Touching the edge is allowed.
+List<LatLng> pathInsideBoundary(List<LatLng> path, List<LatLng> polygon) {
+  if (path.length < 2 || polygon.length < 3) {
+    return List<LatLng>.of(path);
+  }
+  final origin = _centroid(polygon);
+  final ring = _ring(polygon, origin);
+  final kept = <_M>[];
+
+  void add(_M point) {
+    // A point that only barely clears the edge can fall just outside after it
+    // is converted back to latitude and longitude. Sit those on the edge.
+    final placed = _distanceToBoundary(ring, point) <= 0.3
+        ? _nearestPlace(ring, point).point
+        : point;
+    if (kept.isEmpty || _distance(kept.last, placed) > 0.02) {
+      kept.add(placed);
+    }
+  }
+
+  _M? leftAt;
+
+  void rejoin(_M entry) {
+    final exit = leftAt;
+    leftAt = null;
+    if (exit == null) {
+      add(entry);
+      return;
+    }
+    final from = _nearestPlace(ring, exit);
+    final to = _nearestPlace(ring, entry);
+    for (final point in _shorterWalk(ring, from, to)) {
+      add(point);
+    }
+    add(entry);
+  }
+
+  final first = _toMeter(path.first, origin);
+  if (_inside(ring, first)) {
+    add(first);
+  } else {
+    leftAt = first;
+  }
+
+  for (var index = 0; index < path.length - 1; index++) {
+    final start = _toMeter(path[index], origin);
+    final end = _toMeter(path[index + 1], origin);
+    final marks = _insideCuts(ring, start, end);
+    for (var span = 0; span < marks.length - 1; span++) {
+      final fromT = marks[span];
+      final toT = marks[span + 1];
+      if (toT - fromT < 1e-6) {
+        continue;
+      }
+      final mid = _lerpMeter(start, end, (fromT + toT) / 2);
+      final spanStart = _lerpMeter(start, end, fromT);
+      final spanEnd = _lerpMeter(start, end, toT);
+      if (_inside(ring, mid)) {
+        if (leftAt != null) {
+          rejoin(spanStart);
+        }
+        add(spanEnd);
+      } else {
+        leftAt ??= spanStart;
+      }
+    }
+  }
+
+  if (kept.isEmpty && leftAt != null) {
+    add(_nearestPlace(ring, leftAt!).point);
+  }
+  if (kept.length < 2) {
+    return const [];
+  }
+  return [for (final point in kept) _fromMeter(point, origin)];
 }
 
 /// True when [point] is inside [polygon] or within a few centimetres of its edge.
@@ -176,6 +255,106 @@ _Place? _project(List<_M> ring, _M target, {required double maxDistance}) {
     }
   }
   return best;
+}
+
+/// Parameters along [start] → [end] where the segment crosses the boundary.
+///
+/// A pass that stays inside is returned immediately. Exact edge hits are kept,
+/// and a coarse probe fills in a crossing the edge test misses, such as a
+/// pass through a corner.
+List<double> _insideCuts(List<_M> ring, _M start, _M end) {
+  final marks = <double>[0, 1];
+  for (final hit in _hits(ring, start, end)) {
+    final t = hit.cutT.clamp(0.0, 1.0);
+    if (t > 1e-4 && t < 1 - 1e-4) {
+      marks.add(t);
+    }
+  }
+  final startInside = _inside(ring, start);
+  final endInside = _inside(ring, end);
+  final length = _distance(start, end);
+  final staysInside = marks.length == 2 &&
+      startInside &&
+      endInside &&
+      _inside(ring, _lerpMeter(start, end, 0.5)) &&
+      (length <= 8 || _samplesStayInside(ring, start, end, length));
+  if (!staysInside) {
+    _probeStateChanges(ring, start, end, marks);
+  }
+  marks.sort();
+  final unique = <double>[marks.first];
+  for (final mark in marks.skip(1)) {
+    if (mark - unique.last > 1e-5) {
+      unique.add(mark);
+    }
+  }
+  if (unique.last < 1) {
+    unique.add(1);
+  }
+  return unique;
+}
+
+bool _samplesStayInside(List<_M> ring, _M start, _M end, double length) {
+  final steps = max(2, (length / 8).ceil());
+  for (var step = 1; step < steps; step++) {
+    if (!_inside(ring, _lerpMeter(start, end, step / steps))) {
+      return false;
+    }
+  }
+  return true;
+}
+
+void _probeStateChanges(List<_M> ring, _M start, _M end, List<double> marks) {
+  final length = _distance(start, end);
+  final steps = max(1, (length / 4).ceil());
+  var previousInside = _inside(ring, start);
+  for (var step = 1; step <= steps; step++) {
+    final t = step / steps;
+    final inside = _inside(ring, _lerpMeter(start, end, t));
+    if (inside == previousInside) {
+      continue;
+    }
+    var low = (step - 1) / steps;
+    var high = t;
+    for (var refine = 0; refine < 12; refine++) {
+      final mid = (low + high) / 2;
+      if (_inside(ring, _lerpMeter(start, end, mid)) == previousInside) {
+        low = mid;
+      } else {
+        high = mid;
+      }
+    }
+    marks.add((low + high) / 2);
+    previousInside = inside;
+  }
+}
+
+_M _lerpMeter(_M start, _M end, double t) {
+  return _M(start.x + (end.x - start.x) * t, start.y + (end.y - start.y) * t);
+}
+
+_Place _nearestPlace(List<_M> ring, _M target) {
+  return _project(ring, target, maxDistance: double.infinity)!;
+}
+
+List<_M> _shorterWalk(List<_M> ring, _Place from, _Place to) {
+  final forward = _forward(ring, from, to);
+  final backward = _forward(ring, to, from).reversed.toList();
+  if (forward.isEmpty) {
+    return backward;
+  }
+  if (backward.isEmpty) {
+    return forward;
+  }
+  return _chainLength(forward) <= _chainLength(backward) ? forward : backward;
+}
+
+double _chainLength(List<_M> points) {
+  var total = 0.0;
+  for (var index = 1; index < points.length; index++) {
+    total += _distance(points[index - 1], points[index]);
+  }
+  return total;
 }
 
 List<_M> _forward(List<_M> ring, _Place from, _Place to) {
@@ -320,16 +499,14 @@ double _distanceToBoundary(List<_M> polygon, _M point) {
 }
 
 double _distanceToSegment(_M point, _M start, _M end) {
-  final dx = end.x - start.x;
-  final dy = end.y - start.y;
-  final lengthSquared = dx * dx + dy * dy;
-  if (lengthSquared <= 1e-12) {
-    return _distance(point, start);
-  }
-  final t = (((point.x - start.x) * dx + (point.y - start.y) * dy) /
-          lengthSquared)
-      .clamp(0.0, 1.0);
-  return _distance(point, _M(start.x + t * dx, start.y + t * dy));
+  return distanceToSegmentMeters(
+    pointEast: point.x,
+    pointNorth: point.y,
+    startEast: start.x,
+    startNorth: start.y,
+    endEast: end.x,
+    endNorth: end.y,
+  );
 }
 
 double _distance(_M a, _M b) {
@@ -352,22 +529,13 @@ LatLng _centroid(List<LatLng> points) {
   return LatLng(latitude / points.length, longitude / points.length);
 }
 
-const _metersPerDegree = 111320.0;
-
 _M _toMeter(LatLng point, LatLng origin) {
-  final scale = _metersPerDegree * max(1e-6, cos(origin.latitude * pi / 180).abs());
-  return _M(
-    (point.longitude - origin.longitude) * scale,
-    (point.latitude - origin.latitude) * _metersPerDegree,
-  );
+  final local = toLocalMeters(point, origin);
+  return _M(local.east, local.north);
 }
 
 LatLng _fromMeter(_M point, LatLng origin) {
-  final scale = _metersPerDegree * max(1e-6, cos(origin.latitude * pi / 180).abs());
-  return LatLng(
-    origin.latitude + point.y / _metersPerDegree,
-    origin.longitude + point.x / scale,
-  );
+  return fromLocalMeters(LocalMeters(point.x, point.y), origin);
 }
 
 class _Place {

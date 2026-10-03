@@ -43,8 +43,9 @@ void main() {
     final turnedLng = (turned.endpoints[0].longitude - turned.endpoints[1].longitude).abs();
 
     expect(flatLng, greaterThan(flatLat));
-    expect(flat.endpoints[0].latitude, closeTo(12.970, 1e-7));
-    expect(flat.endpoints[1].latitude, closeTo(12.970, 1e-7));
+    final insetLatitude = 12.970 + defaultCoverageMarginMeters / 111320;
+    expect(flat.endpoints[0].latitude, closeTo(insetLatitude, 5e-6));
+    expect(flat.endpoints[1].latitude, closeTo(insetLatitude, 5e-6));
     expect(turnedLat, greaterThan(turnedLng));
 
     await repo.generateCoverage(spacingMeters: 1, orientationDegrees: 45);

@@ -3,6 +3,18 @@ import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/legacy.dart';
+import 'package:latlong2/latlong.dart';
+
+/// Where a map opens before a field or a drone position is known.
+const defaultMapCenter = LatLng(12.9716, 77.5946);
+
+/// Pan and zoom stay on. Rotation stays off on every planning map.
+InteractionOptions mapGestureOptions() {
+  return InteractionOptions(
+    flags: InteractiveFlag.all & ~InteractiveFlag.rotate,
+    cursorKeyboardRotationOptions: CursorKeyboardRotationOptions.disabled(),
+  );
+}
 
 enum MapViewMode { street, satellite }
 

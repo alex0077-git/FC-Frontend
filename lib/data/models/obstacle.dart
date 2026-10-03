@@ -1,5 +1,6 @@
 import 'dart:math';
 
+import 'package:fc_frontend/core/geometry/local_meters.dart';
 import 'package:latlong2/latlong.dart';
 
 enum ObstacleType { circle, square }
@@ -259,21 +260,15 @@ double _length(double x, double y) {
 }
 
 double _xySegmentDistance(_XY point, _XY start, _XY end) {
-  final dx = end.x - start.x;
-  final dy = end.y - start.y;
-  final lengthSquared = dx * dx + dy * dy;
-  if (lengthSquared < 1e-8) {
-    return _length(point.x - start.x, point.y - start.y);
-  }
-  final t = ((point.x - start.x) * dx + (point.y - start.y) * dy) / lengthSquared;
-  final clamped = t.clamp(0.0, 1.0);
-  return _length(
-    point.x - (start.x + clamped * dx),
-    point.y - (start.y + clamped * dy),
+  return distanceToSegmentMeters(
+    pointEast: point.x,
+    pointNorth: point.y,
+    startEast: start.x,
+    startNorth: start.y,
+    endEast: end.x,
+    endNorth: end.y,
   );
 }
-
-const _metersPerDegree = 111320.0;
 
 class _XY {
   const _XY(this.x, this.y);
@@ -527,17 +522,10 @@ double _metersBetween(LatLng start, LatLng end) {
 }
 
 _XY _toXY(LatLng point, LatLng origin) {
-  final scale = _metersPerDegree * cos(origin.latitude * pi / 180);
-  return _XY(
-    (point.longitude - origin.longitude) * scale,
-    (point.latitude - origin.latitude) * _metersPerDegree,
-  );
+  final local = toLocalMeters(point, origin);
+  return _XY(local.east, local.north);
 }
 
 LatLng _fromXY(_XY point, LatLng origin) {
-  final scale = _metersPerDegree * cos(origin.latitude * pi / 180);
-  return LatLng(
-    origin.latitude + point.y / _metersPerDegree,
-    origin.longitude + point.x / scale,
-  );
+  return fromLocalMeters(LocalMeters(point.x, point.y), origin);
 }
