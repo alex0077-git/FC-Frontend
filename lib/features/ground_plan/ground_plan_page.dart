@@ -63,6 +63,7 @@ class _GroundPlanPageState extends ConsumerState<GroundPlanPage> {
   ObstacleTool? _obstacleTool;
   String? _selectedObstacleId;
   LatLng? _obstacleMoveOrigin;
+  List<LatLng> _polygonDraft = [];
 
   @override
   void dispose() {
@@ -206,6 +207,7 @@ class _GroundPlanPageState extends ConsumerState<GroundPlanPage> {
       splitEnd: _placement == _MapPlacement.split ? _splitEnd : savedSplit?.end,
       obstacleMapping: _mappingObstacles,
       obstacleTool: _obstacleTool,
+      polygonDraft: _polygonDraft,
       selectedObstacleId: _selectedObstacleId,
       onMarkSplit: _markSplit,
       editingEnabled: !mission.boundaryEditingLocked,
@@ -291,12 +293,12 @@ class _GroundPlanPageState extends ConsumerState<GroundPlanPage> {
               tool: _obstacleTool,
               obstacles: mission.obstacles,
               selectedId: _selectedObstacleId,
+              polygonPoints: _polygonDraft.length,
               onCircle: () => _chooseObstacleTool(ObstacleTool.circle),
-              onSquare: () => _chooseObstacleTool(ObstacleTool.square),
+              onPolygon: () => _chooseObstacleTool(ObstacleTool.polygon),
+              onCloseShape: _closePolygon,
               onSelect: (id) => _selectObstacle(id, mission),
               onRadius: _setObstacleRadius,
-              onSide: _setObstacleSide,
-              onSave: _saveSelectedObstacle,
               onRemove: _removeSelectedObstacle,
               eastOffsetMeters: _obstacleOffset(mission).$1,
               northOffsetMeters: _obstacleOffset(mission).$2,
@@ -408,6 +410,9 @@ class _GroundPlanPageState extends ConsumerState<GroundPlanPage> {
       _clearSplitDraft();
       _placement = _MapPlacement.boundary;
       _mappingObstacles = true;
+      if (_obstacleTool != tool) {
+        _polygonDraft = [];
+      }
       _obstacleTool = tool;
       _selectedObstacleId = null;
       _obstacleMoveOrigin = null;
@@ -419,6 +424,7 @@ class _GroundPlanPageState extends ConsumerState<GroundPlanPage> {
     _obstacleTool = null;
     _selectedObstacleId = null;
     _obstacleMoveOrigin = null;
+    _polygonDraft = [];
   }
 
   void _selectObstacle(String id, MissionState mission) {
@@ -443,15 +449,15 @@ class _GroundPlanPageState extends ConsumerState<GroundPlanPage> {
       });
       return;
     }
-    if (_obstacleTool == ObstacleTool.square) {
-      if (hit != null) {
+    if (_obstacleTool == ObstacleTool.polygon) {
+      if (_polygonDraft.isEmpty && hit != null) {
         _selectObstacle(hit.id, ref.read(missionRepositoryProvider));
         return;
       }
-      final id = repository.addSquareObstacle(point);
       setState(() {
-        _selectedObstacleId = id;
-        _obstacleMoveOrigin = point;
+        _polygonDraft = [..._polygonDraft, point];
+        _selectedObstacleId = null;
+        _obstacleMoveOrigin = null;
       });
       return;
     }
@@ -459,7 +465,21 @@ class _GroundPlanPageState extends ConsumerState<GroundPlanPage> {
       _selectObstacle(hit.id, ref.read(missionRepositoryProvider));
       return;
     }
-    _showMessage('Choose Circle or Square first.');
+    _showMessage('Choose Circle or Polygon first.');
+  }
+
+  void _closePolygon() {
+    if (_polygonDraft.length < 3) {
+      return;
+    }
+    final id = ref.read(missionRepositoryProvider.notifier).addPolygonObstacle(
+          _polygonDraft,
+        );
+    setState(() {
+      _polygonDraft = [];
+      _selectedObstacleId = id;
+      _obstacleMoveOrigin = _centerOf(ref.read(missionRepositoryProvider), id);
+    });
   }
 
   void _setObstacleRadius(double meters) {
@@ -468,22 +488,6 @@ class _GroundPlanPageState extends ConsumerState<GroundPlanPage> {
       return;
     }
     ref.read(missionRepositoryProvider.notifier).updateObstacleRadius(id, meters);
-  }
-
-  void _setObstacleSide(double meters) {
-    final id = _selectedObstacleId;
-    if (id == null) {
-      return;
-    }
-    ref.read(missionRepositoryProvider.notifier).updateObstacleSide(id, meters);
-  }
-
-  void _saveSelectedObstacle() {
-    final id = _selectedObstacleId;
-    if (id == null) {
-      return;
-    }
-    ref.read(missionRepositoryProvider.notifier).saveObstacle(id);
   }
 
   void _removeSelectedObstacle() {
@@ -875,6 +879,7 @@ class _PlanMap extends StatefulWidget {
     required this.splitEnd,
     required this.obstacleMapping,
     required this.obstacleTool,
+    required this.polygonDraft,
     required this.selectedObstacleId,
     required this.editingEnabled,
     required this.onTap,
@@ -893,6 +898,7 @@ class _PlanMap extends StatefulWidget {
   final LatLng? splitEnd;
   final bool obstacleMapping;
   final ObstacleTool? obstacleTool;
+  final List<LatLng> polygonDraft;
   final String? selectedObstacleId;
   final bool editingEnabled;
   final void Function(TapPosition tapPosition, LatLng point) onTap;
@@ -914,8 +920,10 @@ class _PlanMapState extends State<_PlanMap> {
     final hint = widget.obstacleMapping
         ? switch (widget.obstacleTool) {
             ObstacleTool.circle => 'Tap the map to place a circle no-fly zone',
-            ObstacleTool.square => 'Tap the map to place a square no-fly zone',
-            null => 'Choose Circle or Square',
+            ObstacleTool.polygon => widget.polygonDraft.isEmpty
+                ? 'Tap the map to place polygon points'
+                : 'Tap to add the next point, then press Close Shape',
+            null => 'Choose Circle or Polygon',
           }
         : switch (widget.placement) {
             _MapPlacement.pointA => 'Tap the map to place point A',
@@ -972,6 +980,27 @@ class _PlanMapState extends State<_PlanMap> {
               obstacles: widget.mission.obstacles,
               selectedId: widget.selectedObstacleId,
             ),
+            if (widget.polygonDraft.length >= 3)
+              PolygonLayer(
+                polygons: [
+                  Polygon(
+                    points: widget.polygonDraft,
+                    color: Colors.red.withValues(alpha: 0.18),
+                    borderColor: Colors.red,
+                    borderStrokeWidth: 2,
+                  ),
+                ],
+              )
+            else if (widget.polygonDraft.length == 2)
+              PolylineLayer(
+                polylines: [
+                  Polyline(
+                    points: widget.polygonDraft,
+                    color: Colors.red,
+                    strokeWidth: 2,
+                  ),
+                ],
+              ),
             MarkerLayer(
               markers: [
                 for (final point in widget.mission.boundaryPoints)
@@ -1014,6 +1043,16 @@ class _PlanMapState extends State<_PlanMap> {
                           _preview = null;
                         });
                       },
+                    ),
+                  ),
+                for (var index = 0; index < widget.polygonDraft.length; index++)
+                  Marker(
+                    point: widget.polygonDraft[index],
+                    width: 28,
+                    height: 28,
+                    child: _IndexMarker(
+                      label: '${index + 1}',
+                      color: Colors.red,
                     ),
                   ),
                 if (widget.pointA != null)
@@ -1097,15 +1136,16 @@ class _PlanMapState extends State<_PlanMap> {
 }
 
 class _IndexMarker extends StatelessWidget {
-  const _IndexMarker({required this.label});
+  const _IndexMarker({required this.label, this.color = AppTheme.primary});
 
   final String label;
+  final Color color;
 
   @override
   Widget build(BuildContext context) {
     return DecoratedBox(
       decoration: BoxDecoration(
-        color: AppTheme.primary,
+        color: color,
         shape: BoxShape.circle,
         border: Border.all(color: Colors.white),
       ),

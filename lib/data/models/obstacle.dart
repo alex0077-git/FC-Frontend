@@ -3,113 +3,117 @@ import 'dart:math';
 import 'package:fc_frontend/core/geometry/local_meters.dart';
 import 'package:latlong2/latlong.dart';
 
-enum ObstacleType { circle, square }
+enum ObstacleType { circle, polygon }
 
 /// A no-fly zone. Both shapes are exclusion zones: coverage keeps the ground
 /// outside the shape and drops anything [contains] reports as inside.
 ///
 /// A future `bufferMeters` field can grow that blocked area without changing
 /// callers. [contains] is the only place that decision needs to live: a circle
-/// would test `radiusMeters + bufferMeters`, and a square would test
-/// `sideMeters / 2 + bufferMeters`.
+/// would test `radiusMeters + bufferMeters`, and a polygon would grow each edge
+/// outward by that same distance.
 class Obstacle {
   const Obstacle({
     required this.id,
     required this.type,
     this.center,
     this.radiusMeters,
-    this.sideMeters,
-    this.finalized = true,
+    this.vertices = const [],
   });
 
   final String id;
   final ObstacleType type;
   final LatLng? center;
   final double? radiusMeters;
-  final double? sideMeters;
 
-  /// Saved squares keep their side length. A new square stays editable until
-  /// the user presses Save.
-  final bool finalized;
+  /// Polygon corners in the order the user tapped them. The shape is closed
+  /// from the last point back to the first. A circle leaves this empty.
+  final List<LatLng> vertices;
 
   static const defaultRadiusMeters = 10.0;
-  static const defaultSideMeters = 10.0;
   static const minSizeMeters = 1.0;
   static const maxSizeMeters = 500.0;
 
-  LatLng get labelPoint => center ?? const LatLng(0, 0);
+  LatLng get labelPoint => center ?? (vertices.isEmpty ? const LatLng(0, 0) : vertices.first);
+
+  /// Average of the polygon corners, in local meters, so a move can shift
+  /// every corner by the same offset.
+  static LatLng centerOf(List<LatLng> vertices) {
+    final origin = vertices.first;
+    var east = 0.0;
+    var north = 0.0;
+    for (final vertex in vertices) {
+      final local = toLocalMeters(vertex, origin);
+      east += local.east;
+      north += local.north;
+    }
+    final count = vertices.length;
+    return fromLocalMeters(LocalMeters(east / count, north / count), origin);
+  }
 
   /// Ring used to paint the zone. A circle is drawn as many sides so the red
-  /// edge matches the meter check in [contains]. A square is axis-aligned
-  /// on the ground (east-north), not on the screen.
+  /// edge matches the meter check in [contains]. A polygon uses the tapped
+  /// corners in order.
   List<LatLng> get outline {
-    final zoneCenter = center;
-    if (zoneCenter == null) {
-      return const [];
+    if (type == ObstacleType.circle && center != null && radiusMeters != null) {
+      return _circleOutline(center!, radiusMeters!);
     }
-    if (type == ObstacleType.circle && radiusMeters != null) {
-      return _circleOutline(zoneCenter, radiusMeters!);
-    }
-    if (type == ObstacleType.square && sideMeters != null) {
-      return _squareOutline(zoneCenter, sideMeters!);
+    if (type == ObstacleType.polygon && vertices.length >= 3) {
+      return vertices;
     }
     return const [];
   }
 
   /// True when [point] is inside this zone or on its border.
   /// Circle: distance from the center is at most the radius.
-  /// Square: the point is within half the side length on both axes.
+  /// Polygon: the point is inside the tapped ring or on one of its edges.
   bool contains(LatLng point) {
-    final zoneCenter = center;
-    if (zoneCenter == null) {
-      return false;
-    }
-    final local = _toXY(point, zoneCenter);
     if (type == ObstacleType.circle) {
+      final zoneCenter = center;
       final radius = radiusMeters;
-      if (radius == null) {
+      if (zoneCenter == null || radius == null) {
         return false;
       }
+      final local = _toXY(point, zoneCenter);
       return _length(local.x, local.y) <= radius;
     }
-    final side = sideMeters;
-    if (side == null) {
+    final ring = _polygonLocal(this);
+    if (ring == null) {
       return false;
     }
-    final half = side / 2;
-    return local.x.abs() <= half && local.y.abs() <= half;
+    final local = _toXY(point, ring.origin);
+    if (_distanceToRing(local, ring.vertices) <= borderTouchMeters) {
+      return true;
+    }
+    return _pointInRing(ring.vertices, local);
   }
 
   /// True when [point] is inside the painted zone, not merely touching its edge.
   /// The flight path may sit on the red boundary. It must not cross into this.
   bool enters(LatLng point) {
-    final zoneCenter = center;
-    if (zoneCenter == null) {
-      return false;
-    }
-    final local = _toXY(point, zoneCenter);
     if (type == ObstacleType.circle) {
+      final zoneCenter = center;
       final radius = radiusMeters;
-      if (radius == null) {
+      if (zoneCenter == null || radius == null) {
         return false;
       }
+      final local = _toXY(point, zoneCenter);
       return _length(local.x, local.y) < radius - borderTouchMeters;
     }
-    final side = sideMeters;
-    if (side == null) {
+    final ring = _polygonLocal(this);
+    if (ring == null) {
       return false;
     }
-    final half = side / 2 - borderTouchMeters;
-    return local.x.abs() < half && local.y.abs() < half;
+    final local = _toXY(point, ring.origin);
+    if (_distanceToRing(local, ring.vertices) <= borderTouchMeters) {
+      return false;
+    }
+    return _pointInRing(ring.vertices, local);
   }
 
   /// How close a path point may come to the painted edge and still count as
   /// touching it, rather than flying through the zone.
   static const borderTouchMeters = 0.02;
-
-  /// Kept so a square route can sit on the painted edge. The drawn square
-  /// does not grow by this amount.
-  static const avoidanceMarginMeters = 0.0;
 
   /// No extra gap outside a circle. Straight sides may touch the red edge.
   /// Their corners stay outside so a side does not cut through the disk.
@@ -123,7 +127,9 @@ class Obstacle {
   ///
   /// A circle is routed along the straight sides of a 12-sided polygon whose
   /// sides touch the red edge and whose corners stay outside it. The shorter
-  /// way is used. That polygon is never drawn. A square follows its own sides.
+  /// way is used. That polygon is never drawn. A freeform polygon follows the
+  /// shorter chain of its own corners between the entry and exit, so the path
+  /// touches only the vertices it needs and does not trace the whole outline.
   /// The red circle drawn on the map stays round.
   List<LatLng> routeAround(
     LatLng from,
@@ -168,58 +174,6 @@ class Obstacle {
     );
   }
 
-  /// Corners of the flight outline. A circle has eight, with one pointing north.
-  /// A square has its own four corners.
-  List<LatLng> get routeCorners {
-    final ring = _flightRing(this);
-    if (ring == null) {
-      return const [];
-    }
-    return [
-      for (final vertex in ring.vertices) _fromXY(vertex, ring.center),
-    ];
-  }
-
-  /// The whole flight outline, starting and ending at [entry], so the pass
-  /// that meets the obstacle draws every side once.
-  List<LatLng> routeLoop(LatLng entry) {
-    final ring = _flightRing(this);
-    if (ring == null || ring.vertices.length < 3) {
-      return const [];
-    }
-    final local = _toXY(entry, ring.center);
-    var edge = 0;
-    var nearest = double.infinity;
-    for (var index = 0; index < ring.vertices.length; index++) {
-      final distance = _xySegmentDistance(
-        local,
-        ring.vertices[index],
-        ring.vertices[(index + 1) % ring.vertices.length],
-      );
-      if (distance < nearest) {
-        nearest = distance;
-        edge = index;
-      }
-    }
-    final count = ring.vertices.length;
-    final loop = <LatLng>[entry];
-    var vertex = (edge + 1) % count;
-    for (var guard = 0; guard < count; guard++) {
-      final point = _fromXY(ring.vertices[vertex], ring.center);
-      if (_metersBetween(loop.last, point) > 0.02) {
-        loop.add(point);
-      }
-      vertex = (vertex + 1) % count;
-      if (vertex == (edge + 1) % count) {
-        break;
-      }
-    }
-    if (_metersBetween(loop.last, entry) > 0.02) {
-      loop.add(entry);
-    }
-    return loop;
-  }
-
   /// Pieces of [start] → [end] that stay outside the flight ring. Endpoints
   /// are the exact crossings of that ring, so the pass meets the path outline
   /// with no gap and no extra stub.
@@ -241,7 +195,7 @@ class Obstacle {
         continue;
       }
       final middle = _lerp(start, end, (fromT + toT) / 2);
-      if (_insideConvex(ring.vertices, _toXY(middle, ring.center))) {
+      if (_pointInRing(ring.vertices, _toXY(middle, ring.center))) {
         continue;
       }
       final pieceStart = _lerp(start, end, fromT);
@@ -288,16 +242,6 @@ List<LatLng> _circleOutline(LatLng center, double radiusMeters) {
         ),
         center,
       ),
-  ];
-}
-
-List<LatLng> _squareOutline(LatLng center, double sideMeters) {
-  final half = sideMeters / 2;
-  return [
-    _fromXY(_XY(-half, -half), center),
-    _fromXY(_XY(half, -half), center),
-    _fromXY(_XY(half, half), center),
-    _fromXY(_XY(-half, half), center),
   ];
 }
 
@@ -348,11 +292,10 @@ class _FlightRing {
 }
 
 _FlightRing? _flightRing(Obstacle obstacle) {
-  final zoneCenter = obstacle.center;
-  if (zoneCenter == null) {
-    return null;
-  }
-  if (obstacle.type == ObstacleType.circle && obstacle.radiusMeters != null) {
+  if (obstacle.type == ObstacleType.circle &&
+      obstacle.center != null &&
+      obstacle.radiusMeters != null) {
+    final zoneCenter = obstacle.center!;
     final step = 2 * pi / Obstacle.circleRouteSides;
     // Each side touches the red circle. Corners stay outside it, so the
     // straight side does not cross into the disk.
@@ -366,29 +309,61 @@ _FlightRing? _flightRing(Obstacle obstacle) {
         ),
     ]);
   }
-  if (obstacle.type == ObstacleType.square && obstacle.sideMeters != null) {
-    final half = obstacle.sideMeters! / 2 + Obstacle.avoidanceMarginMeters;
-    return _FlightRing(zoneCenter, [
-      _XY(-half, -half),
-      _XY(half, -half),
-      _XY(half, half),
-      _XY(-half, half),
-    ]);
+  final polygon = _polygonLocal(obstacle);
+  if (polygon == null) {
+    return null;
   }
-  return null;
+  return _FlightRing(polygon.origin, polygon.vertices);
 }
 
-bool _insideConvex(List<_XY> ring, _XY point) {
-  for (var index = 0; index < ring.length; index++) {
-    final start = ring[index];
-    final end = ring[(index + 1) % ring.length];
-    final cross = (end.x - start.x) * (point.y - start.y) -
-        (end.y - start.y) * (point.x - start.x);
-    if (cross < -0.02) {
-      return false;
+class _PolygonLocal {
+  const _PolygonLocal(this.origin, this.vertices);
+
+  final LatLng origin;
+  final List<_XY> vertices;
+}
+
+_PolygonLocal? _polygonLocal(Obstacle obstacle) {
+  if (obstacle.type != ObstacleType.polygon || obstacle.vertices.length < 3) {
+    return null;
+  }
+  final origin = obstacle.center ?? obstacle.vertices.first;
+  return _PolygonLocal(origin, [
+    for (final vertex in obstacle.vertices) _toXY(vertex, origin),
+  ]);
+}
+
+bool _pointInRing(List<_XY> ring, _XY point) {
+  var inside = false;
+  for (var index = 0, previous = ring.length - 1; index < ring.length; previous = index++) {
+    final start = ring[previous];
+    final end = ring[index];
+    final crosses = (start.y > point.y) != (end.y > point.y);
+    if (!crosses) {
+      continue;
+    }
+    final east = start.x +
+        (point.y - start.y) / (end.y - start.y) * (end.x - start.x);
+    if (point.x < east) {
+      inside = !inside;
     }
   }
-  return true;
+  return inside;
+}
+
+double _distanceToRing(_XY point, List<_XY> ring) {
+  var nearest = double.infinity;
+  for (var index = 0; index < ring.length; index++) {
+    final distance = _xySegmentDistance(
+      point,
+      ring[index],
+      ring[(index + 1) % ring.length],
+    );
+    if (distance < nearest) {
+      nearest = distance;
+    }
+  }
+  return nearest;
 }
 
 List<({double t, int edge, LatLng point})> _ringHits(

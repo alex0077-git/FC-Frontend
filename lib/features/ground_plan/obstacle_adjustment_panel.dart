@@ -16,8 +16,6 @@ class ObstacleAdjustmentPanel extends StatefulWidget {
     required this.eastOffsetMeters,
     required this.northOffsetMeters,
     required this.onRadius,
-    required this.onSide,
-    required this.onSave,
     required this.onNudge,
     required this.onOk,
     required this.onCancel,
@@ -28,8 +26,6 @@ class ObstacleAdjustmentPanel extends StatefulWidget {
   final double eastOffsetMeters;
   final double northOffsetMeters;
   final ValueChanged<double> onRadius;
-  final ValueChanged<double> onSide;
-  final VoidCallback? onSave;
   final void Function(double eastMeters, double northMeters) onNudge;
   final VoidCallback onOk;
   final VoidCallback onCancel;
@@ -57,16 +53,7 @@ class _ObstacleAdjustmentPanelState extends State<ObstacleAdjustmentPanel> {
     Scrollable.ensureVisible(target, alignment: 0.15);
   }
 
-  bool get _canEditSize {
-    if (widget.obstacle.type == ObstacleType.circle) {
-      return true;
-    }
-    return widget.obstacle.type == ObstacleType.square && !widget.obstacle.finalized;
-  }
-
-  String get _sizeLabel {
-    return widget.obstacle.type == ObstacleType.square ? 'Side' : 'Radius';
-  }
+  bool get _canEditSize => widget.obstacle.type == ObstacleType.circle;
 
   @override
   Widget build(BuildContext context) {
@@ -90,7 +77,7 @@ class _ObstacleAdjustmentPanelState extends State<ObstacleAdjustmentPanel> {
             if (_canEditSize)
               Expanded(
                 child: _TabButton(
-                  label: _sizeLabel,
+                  label: 'Radius',
                   selected: tab == _AdjustTab.size,
                   onPressed: () => setState(() => _tab = _AdjustTab.size),
                 ),
@@ -107,35 +94,15 @@ class _ObstacleAdjustmentPanelState extends State<ObstacleAdjustmentPanel> {
         ),
         const SizedBox(height: 8),
         if (tab == _AdjustTab.size) ...[
-          if (widget.obstacle.type == ObstacleType.circle)
-            LineSpacingControl(
-              title: '',
-              decreaseTooltip: 'Decrease radius',
-              increaseTooltip: 'Increase radius',
-              spacingMeters:
-                  widget.obstacle.radiusMeters ?? Obstacle.defaultRadiusMeters,
-              lowerMeters: Obstacle.minSizeMeters,
-              upperMeters: Obstacle.maxSizeMeters,
-              onChanged: widget.onRadius,
-            ),
-          if (widget.obstacle.type == ObstacleType.square &&
-              !widget.obstacle.finalized) ...[
-            LineSpacingControl(
-              title: '',
-              decreaseTooltip: 'Decrease side',
-              increaseTooltip: 'Increase side',
-              spacingMeters: widget.obstacle.sideMeters ?? Obstacle.defaultSideMeters,
-              lowerMeters: Obstacle.minSizeMeters,
-              upperMeters: Obstacle.maxSizeMeters,
-              onChanged: widget.onSide,
-            ),
-            const SizedBox(height: 8),
-            FilledButton(
-              style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(44)),
-              onPressed: widget.onSave,
-              child: const Text('Save'),
-            ),
-          ],
+          LineSpacingControl(
+            title: '',
+            decreaseTooltip: 'Decrease radius',
+            increaseTooltip: 'Increase radius',
+            spacingMeters: widget.obstacle.radiusMeters ?? Obstacle.defaultRadiusMeters,
+            lowerMeters: Obstacle.minSizeMeters,
+            upperMeters: Obstacle.maxSizeMeters,
+            onChanged: widget.onRadius,
+          ),
         ] else
           _PositionPad(
             eastOffsetMeters: widget.eastOffsetMeters,

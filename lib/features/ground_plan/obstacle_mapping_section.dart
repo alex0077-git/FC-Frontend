@@ -2,9 +2,9 @@ import 'package:fc_frontend/data/models/obstacle.dart';
 import 'package:fc_frontend/features/ground_plan/obstacle_adjustment_panel.dart';
 import 'package:flutter/material.dart';
 
-enum ObstacleTool { circle, square }
+enum ObstacleTool { circle, polygon }
 
-/// Circle and square choices, plus the live size controls for a selected zone.
+/// Circle and polygon choices, plus the live controls for a selected zone.
 class ObstacleMappingSection extends StatelessWidget {
   const ObstacleMappingSection({
     super.key,
@@ -12,12 +12,12 @@ class ObstacleMappingSection extends StatelessWidget {
     required this.tool,
     required this.obstacles,
     required this.selectedId,
+    required this.polygonPoints,
     required this.onCircle,
-    required this.onSquare,
+    required this.onPolygon,
+    required this.onCloseShape,
     required this.onSelect,
     required this.onRadius,
-    required this.onSide,
-    required this.onSave,
     required this.onRemove,
     required this.eastOffsetMeters,
     required this.northOffsetMeters,
@@ -30,12 +30,14 @@ class ObstacleMappingSection extends StatelessWidget {
   final ObstacleTool? tool;
   final List<Obstacle> obstacles;
   final String? selectedId;
+
+  /// Points tapped so far for a polygon that is not closed yet.
+  final int polygonPoints;
   final VoidCallback onCircle;
-  final VoidCallback onSquare;
+  final VoidCallback onPolygon;
+  final VoidCallback onCloseShape;
   final ValueChanged<String> onSelect;
   final ValueChanged<double> onRadius;
-  final ValueChanged<double> onSide;
-  final VoidCallback onSave;
   final VoidCallback onRemove;
   final double eastOffsetMeters;
   final double northOffsetMeters;
@@ -46,9 +48,6 @@ class ObstacleMappingSection extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final selected = _selected();
-    final editingSquare = selected != null &&
-        selected.type == ObstacleType.square &&
-        !selected.finalized;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -67,13 +66,21 @@ class ObstacleMappingSection extends StatelessWidget {
               const SizedBox(width: 8),
               Expanded(
                 child: _ToolButton(
-                  label: 'Square',
-                  selected: tool == ObstacleTool.square,
-                  onPressed: onSquare,
+                  label: 'Polygon',
+                  selected: tool == ObstacleTool.polygon,
+                  onPressed: onPolygon,
                 ),
               ),
             ],
           ),
+          if (tool == ObstacleTool.polygon) ...[
+            const SizedBox(height: 8),
+            FilledButton(
+              style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(44)),
+              onPressed: polygonPoints >= 3 ? onCloseShape : null,
+              child: const Text('Close Shape'),
+            ),
+          ],
         ],
         if (obstacles.isEmpty && !choosing)
           const Padding(
@@ -91,7 +98,7 @@ class ObstacleMappingSection extends StatelessWidget {
             ),
             onPressed: () => onSelect(obstacle.id),
             child: Text(
-              obstacle.type == ObstacleType.circle ? 'Circle zone' : 'Square zone',
+              obstacle.type == ObstacleType.circle ? 'Circle zone' : 'Polygon zone',
             ),
           ),
           if (selected != null && obstacle.id == selected.id)
@@ -103,8 +110,6 @@ class ObstacleMappingSection extends StatelessWidget {
                 eastOffsetMeters: eastOffsetMeters,
                 northOffsetMeters: northOffsetMeters,
                 onRadius: onRadius,
-                onSide: onSide,
-                onSave: editingSquare ? onSave : null,
                 onNudge: onNudge,
                 onOk: onOk,
                 onCancel: onCancel,
@@ -129,9 +134,10 @@ class ObstacleMappingSection extends StatelessWidget {
     return switch (tool) {
       ObstacleTool.circle =>
         'Tap the map to place a circle. Tap a red zone to resize it.',
-      ObstacleTool.square =>
-        'Tap the map to place a square, set its side, then press Save.',
-      null => 'Choose Circle or Square, then tap the map.',
+      ObstacleTool.polygon => polygonPoints == 0
+          ? 'Tap the map to place each corner, in order.'
+          : 'Tap to add the next corner. Close Shape finishes the zone.',
+      null => 'Choose Circle or Polygon, then tap the map.',
     };
   }
 }

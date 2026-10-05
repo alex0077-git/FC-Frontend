@@ -14,7 +14,7 @@ import 'package:latlong2/latlong.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
-  test('a circle and a square both block their interior', () {
+  test('a circle and a polygon both block their interior', () {
     final circle = Obstacle(
       id: 'circle',
       type: ObstacleType.circle,
@@ -25,25 +25,35 @@ void main() {
     expect(circle.contains(_at(-10, 25)), isTrue);
     expect(circle.contains(_at(-10, 27)), isFalse);
 
-    final square = Obstacle(
-      id: 'square',
-      type: ObstacleType.square,
-      center: _at(10, 20),
-      sideMeters: 12,
-    );
-    expect(square.contains(_at(10, 20)), isTrue);
-    expect(square.contains(_at(15, 20)), isTrue);
-    expect(square.contains(_at(17, 20)), isFalse);
-    expect(square.contains(_at(0, 20)), isFalse);
+    final polygon = _box(id: 'polygon', centerEast: 10, centerNorth: 20, half: 6);
+    expect(polygon.contains(_at(10, 20)), isTrue);
+    expect(polygon.contains(_at(15, 20)), isTrue);
+    expect(polygon.contains(_at(17, 20)), isFalse);
+    expect(polygon.contains(_at(0, 20)), isFalse);
+    expect(polygon.enters(_at(16, 20)), isFalse);
     expect(circle.outsidePieces(_at(-20, 20), _at(20, 20)), hasLength(2));
-    expect(square.outsidePieces(_at(-20, 20), _at(20, 20)), hasLength(2));
+    expect(polygon.outsidePieces(_at(-20, 20), _at(20, 20)), hasLength(2));
+
+    final notch = _polygon('notch', [
+      _at(0, 0),
+      _at(16, 0),
+      _at(16, 6),
+      _at(6, 6),
+      _at(6, 16),
+      _at(0, 16),
+    ]);
+    expect(notch.contains(_at(4, 3)), isTrue);
+    expect(notch.contains(_at(12, 12)), isFalse);
+    expect(notch.enters(_at(16, 3)), isFalse);
   });
 
   test('waypoints cannot be placed or dragged inside either shape', () {
     final repository = MissionRepository();
     _addRectangle(repository);
     repository.addCircleObstacle(_at(-10, 20));
-    repository.addSquareObstacle(_at(10, 20));
+    repository.addPolygonObstacle(
+      _box(id: 'unused', centerEast: 10, centerNorth: 20, half: 5).vertices,
+    );
 
     expect(
       repository.addBoundaryPoint(
@@ -73,17 +83,16 @@ void main() {
     expect(repository.state.boundaryPoints.first.latitude, corner.latitude);
   });
 
-  test('coverage stays outside both a circle and a square', () async {
+  test('coverage stays outside both a circle and a polygon', () async {
     final repository = MissionRepository();
     _addRectangle(repository);
     repository.addCircleObstacle(_at(-10, 20));
     repository.updateObstacleRadius(repository.state.obstacles.first.id, 6);
-    final squareId = repository.addSquareObstacle(_at(10, 20));
-    repository.updateObstacleSide(squareId, 12);
-    repository.saveObstacle(squareId);
-    expect(repository.state.obstacles.last.finalized, isTrue);
-    repository.updateObstacleSide(squareId, 30);
-    expect(repository.state.obstacles.last.sideMeters, 12);
+    repository.addPolygonObstacle(
+      _box(id: 'unused', centerEast: 10, centerNorth: 20, half: 6).vertices,
+    );
+    expect(repository.state.obstacles.last.type, ObstacleType.polygon);
+    expect(repository.state.obstacles.last.vertices, hasLength(4));
 
     await repository.generateCoverage(marginMeters: 0, spacingMeters: 10, orientationDegrees: 0);
 
@@ -118,7 +127,7 @@ void main() {
     expect(_nearLine(lines, _at(10, 16)), isFalse);
   });
 
-  test('a circle follows straight sides and a square follows its edges', () {
+  test('a circle follows straight sides and a polygon uses the short corner chain', () {
     final circle = Obstacle(
       id: 'circle',
       type: ObstacleType.circle,
@@ -159,21 +168,38 @@ void main() {
     expect(cornerSteps, greaterThan(0));
     expect(cornerSteps, lessThan(Obstacle.circleRouteSides));
 
-    final square = Obstacle(
-      id: 'square',
-      type: ObstacleType.square,
-      center: _at(0, 0),
-      sideMeters: 10,
-    );
-    final across = square.routeAround(_at(-40, 0), _at(40, 0));
-    final clip = square.routeAround(_at(-40, 3), _at(40, 6));
+    final box = _box(id: 'box', centerEast: 0, centerNorth: 0, half: 5);
+    final across = box.routeAround(_at(-40, 0), _at(40, 0));
+    final clip = box.routeAround(_at(-40, 3), _at(40, 6));
     expect(across.length, inInclusiveRange(3, 4));
     expect(clip.length, inInclusiveRange(3, 4));
     for (final bend in [across, clip]) {
-      for (var index = 1; index < bend.length; index++) {
-        expect(square.enters(bend[index]), isFalse);
-      }
+      _expectBendOutside(box, bend);
     }
+
+    final pentagon = _polygon('pentagon', [
+      for (var index = 0; index < 5; index++)
+        _at(
+          10 * cos(2 * pi * index / 5),
+          10 * sin(2 * pi * index / 5),
+        ),
+    ]);
+    final aroundPentagon = pentagon.routeAround(_at(-40, 0), _at(40, 0));
+    expect(aroundPentagon.length, greaterThan(2));
+    expect(aroundPentagon.length, lessThan(pentagon.vertices.length + 2));
+    _expectBendOutside(pentagon, aroundPentagon);
+
+    final notch = _polygon('notch', [
+      _at(0, 0),
+      _at(16, 0),
+      _at(16, 6),
+      _at(6, 6),
+      _at(6, 16),
+      _at(0, 16),
+    ]);
+    final along = notch.routeAround(_at(-10, 3), _at(30, 3));
+    expect(along.length, inInclusiveRange(3, 4));
+    _expectBendOutside(notch, along);
   });
 
   test('a circle in the path is a bend in the same connected route', () async {
@@ -261,7 +287,9 @@ void main() {
     }
   });
 
-  testWidgets('square side locks after Save and a circle still resizes', (tester) async {
+  testWidgets('a polygon can be moved but not resized, and a circle still resizes', (
+    tester,
+  ) async {
     SharedPreferences.setMockInitialValues({});
     final preferences = await SharedPreferences.getInstance();
     await tester.pumpWidget(
@@ -292,48 +320,50 @@ void main() {
     await tester.tap(find.text('Add Obstacle'));
     await tester.pump();
     expect(find.text('Circle'), findsOneWidget);
-    expect(find.text('Square'), findsOneWidget);
-    expect(find.text('Polygon'), findsNothing);
+    expect(find.text('Polygon'), findsOneWidget);
+    expect(find.text('Square'), findsNothing);
 
-    await tester.ensureVisible(find.text('Square'));
-    await tester.tap(find.text('Square'));
+    await tester.ensureVisible(find.text('Polygon'));
+    await tester.tap(find.text('Polygon'));
     await tester.pump();
-    final squareId = repository.addSquareObstacle(const LatLng(12.972, 77.592));
-    await tester.pump();
-    await tester.ensureVisible(find.text('Square zone'));
-    await tester.tap(find.text('Square zone'));
-    await tester.pump();
-    expect(find.text('Side'), findsOneWidget);
-    expect(find.text('Save'), findsOneWidget);
-
-    final increaseSide = find.byWidgetPredicate(
-      (widget) => widget is IconButton && widget.tooltip == 'Increase side',
+    expect(
+      tester.widget<FilledButton>(find.widgetWithText(FilledButton, 'Close Shape')).onPressed,
+      isNull,
     );
-    await tester.ensureVisible(increaseSide);
-    await tester.pump();
-    await tester.tap(increaseSide);
-    await tester.pump();
-    expect(repository.state.obstacles.single.sideMeters, 11);
 
-    await tester.ensureVisible(find.text('Save'));
-    await tester.tap(find.text('Save'));
+    final polygonId = repository.addPolygonObstacle([
+      const LatLng(12.971, 77.591),
+      const LatLng(12.971, 77.593),
+      const LatLng(12.973, 77.593),
+      const LatLng(12.973, 77.591),
+    ]);
     await tester.pump();
-    expect(repository.state.obstacles.single.finalized, isTrue);
+    await tester.ensureVisible(find.text('Polygon zone'));
+    await tester.tap(find.text('Polygon zone'));
+    await tester.pump();
+    expect(find.text('Radius'), findsNothing);
     expect(find.text('Side'), findsNothing);
     expect(find.text('Save'), findsNothing);
+    expect(find.text('Position'), findsOneWidget);
 
-    final squareBefore = repository.state.obstacles.single.center!;
+    final polygonBefore = [
+      for (final vertex in repository.state.obstacles.single.vertices) vertex,
+    ];
     final moveEast = find.byWidgetPredicate(
       (widget) => widget is IconButton && widget.tooltip == 'Move east',
     );
     await tester.ensureVisible(moveEast);
     await tester.tap(moveEast);
     await tester.pump();
-    expect(repository.state.obstacles.single.sideMeters, 11);
-    expect(repository.state.obstacles.single.finalized, isTrue);
-    final squareShift = _xy(repository.state.obstacles.single.center!, squareBefore);
-    expect(squareShift.$1, closeTo(0.5, 0.05));
-    expect(squareShift.$2, closeTo(0, 0.05));
+    expect(repository.state.obstacles.single.vertices, hasLength(4));
+    for (var index = 0; index < polygonBefore.length; index++) {
+      final shift = _xy(
+        repository.state.obstacles.single.vertices[index],
+        polygonBefore[index],
+      );
+      expect(shift.$1, closeTo(0.5, 0.05));
+      expect(shift.$2, closeTo(0, 0.05));
+    }
     expect(find.text('0.5'), findsOneWidget);
 
     repository.addCircleObstacle(const LatLng(12.973, 77.593));
@@ -351,13 +381,13 @@ void main() {
     await tester.pump();
     expect(
       repository.state.obstacles
-          .firstWhere((obstacle) => obstacle.id != squareId)
+          .firstWhere((obstacle) => obstacle.id != polygonId)
           .radiusMeters,
       11,
     );
 
     final circle = repository.state.obstacles.firstWhere(
-      (obstacle) => obstacle.id != squareId,
+      (obstacle) => obstacle.id != polygonId,
     );
     await repository.generateCoverage(marginMeters: 0, spacingMeters: 20, orientationDegrees: 0);
     await tester.pump();
@@ -374,7 +404,7 @@ void main() {
     await tester.tap(moveCircleEast);
     await tester.pump();
     final movedCircle = repository.state.obstacles.firstWhere(
-      (obstacle) => obstacle.id != squareId,
+      (obstacle) => obstacle.id != polygonId,
     );
     expect(movedCircle.radiusMeters, 11);
     expect(movedCircle.type, ObstacleType.circle);
@@ -391,7 +421,7 @@ void main() {
     expect(find.text('0.0'), findsNWidgets(2));
 
     final committed = repository.state.obstacles.firstWhere(
-      (obstacle) => obstacle.id != squareId,
+      (obstacle) => obstacle.id != polygonId,
     ).center!;
     await tester.ensureVisible(moveCircleEast);
     await tester.pump();
@@ -403,7 +433,7 @@ void main() {
     await tester.tap(find.text('Cancel'));
     await tester.pump();
     final restored = repository.state.obstacles.firstWhere(
-      (obstacle) => obstacle.id != squareId,
+      (obstacle) => obstacle.id != polygonId,
     );
     expect(_samePoint(restored.center!, committed), isTrue);
     expect(restored.radiusMeters, 11);
@@ -443,23 +473,28 @@ void main() {
     _expectOutside(repository.state.coveragePaths, restored);
 
     await tester.pump(const Duration(milliseconds: 100));
-    final squareId = repository.addSquareObstacle(_at(-12, 8));
-    repository.updateObstacleSide(squareId, 6);
-    repository.saveObstacle(squareId);
-    final squareBefore = repository.state.obstacles
-        .firstWhere((obstacle) => obstacle.id == squareId)
-        .center!;
-    repository.moveObstacle(squareId, eastMeters: 8, northMeters: 0);
+    final polygonCorners = [
+      _at(-15, 5),
+      _at(-9, 5),
+      _at(-9, 11),
+      _at(-15, 11),
+    ];
+    final polygonId = repository.addPolygonObstacle(polygonCorners);
+    final polygonBefore = repository.state.obstacles
+        .firstWhere((obstacle) => obstacle.id == polygonId)
+        .vertices;
+    repository.moveObstacle(polygonId, eastMeters: 8, northMeters: 0);
     await tester.pump();
-    final square = repository.state.obstacles.firstWhere(
-      (obstacle) => obstacle.id == squareId,
+    final polygon = repository.state.obstacles.firstWhere(
+      (obstacle) => obstacle.id == polygonId,
     );
-    expect(square.sideMeters, 6);
-    expect(square.finalized, isTrue);
-    final squareShift = _xy(square.center!, squareBefore);
-    expect(squareShift.$1, closeTo(8, 0.05));
-    expect(squareShift.$2, closeTo(0, 0.05));
-    _expectOutside(repository.state.coveragePaths, square);
+    expect(polygon.vertices, hasLength(4));
+    for (var index = 0; index < polygonBefore.length; index++) {
+      final polygonShift = _xy(polygon.vertices[index], polygonBefore[index]);
+      expect(polygonShift.$1, closeTo(8, 0.05));
+      expect(polygonShift.$2, closeTo(0, 0.05));
+    }
+    _expectOutside(repository.state.coveragePaths, polygon);
     _expectOutside(
       repository.state.coveragePaths,
       repository.state.obstacles.firstWhere((obstacle) => obstacle.id == circleId),
@@ -497,6 +532,43 @@ void main() {
     expect(_hugsCircle(repository.state.coveragePaths, settled), isTrue);
     await tester.pump(const Duration(milliseconds: 100));
   });
+}
+
+void _expectBendOutside(Obstacle obstacle, List<LatLng> bend) {
+  for (var index = 0; index < bend.length; index++) {
+    expect(obstacle.enters(bend[index]), isFalse);
+    if (index == 0) {
+      continue;
+    }
+    final mid = LatLng(
+      (bend[index - 1].latitude + bend[index].latitude) / 2,
+      (bend[index - 1].longitude + bend[index].longitude) / 2,
+    );
+    expect(obstacle.enters(mid), isFalse);
+  }
+}
+
+Obstacle _polygon(String id, List<LatLng> vertices) {
+  return Obstacle(
+    id: id,
+    type: ObstacleType.polygon,
+    center: Obstacle.centerOf(vertices),
+    vertices: vertices,
+  );
+}
+
+Obstacle _box({
+  required String id,
+  required double centerEast,
+  required double centerNorth,
+  required double half,
+}) {
+  return _polygon(id, [
+    _at(centerEast - half, centerNorth - half),
+    _at(centerEast + half, centerNorth - half),
+    _at(centerEast + half, centerNorth + half),
+    _at(centerEast - half, centerNorth + half),
+  ]);
 }
 
 void _expectOutside(List<CoveragePath> paths, Obstacle obstacle) {

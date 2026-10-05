@@ -66,7 +66,7 @@ class MissionState {
   final int activeSplit;
 
   /// True only if a coverage waypoint still landed inside a no-fly zone after
-  /// the outside portions of each pass were kept. A normal circle or square
+  /// the outside portions of each pass were kept. A normal circle or polygon
   /// cut does not set this.
   final bool coverageBlockedByObstacle;
 
@@ -285,13 +285,16 @@ class MissionRepository extends StateNotifier<MissionState> {
     return obstacle.id;
   }
 
-  String addSquareObstacle(LatLng center) {
+  String addPolygonObstacle(List<LatLng> vertices) {
+    if (vertices.length < 3) {
+      return '';
+    }
+    final corners = List<LatLng>.unmodifiable(vertices);
     final obstacle = Obstacle(
       id: _nextId('obstacle'),
-      type: ObstacleType.square,
-      center: center,
-      sideMeters: Obstacle.defaultSideMeters,
-      finalized: false,
+      type: ObstacleType.polygon,
+      center: Obstacle.centerOf(corners),
+      vertices: corners,
     );
     _setObstacles([...state.obstacles, obstacle]);
     return obstacle.id;
@@ -313,29 +316,6 @@ class MissionRepository extends StateNotifier<MissionState> {
         type: ObstacleType.circle,
         center: current.center,
         radiusMeters: radius,
-      );
-    });
-  }
-
-  void updateObstacleSide(String id, double sideMeters) {
-    _replaceMatchedObstacle(id, (current) {
-      if (current.type != ObstacleType.square ||
-          current.center == null ||
-          current.finalized) {
-        return null;
-      }
-      final side = sideMeters
-          .clamp(Obstacle.minSizeMeters, Obstacle.maxSizeMeters)
-          .toDouble();
-      if (current.sideMeters == side) {
-        return null;
-      }
-      return Obstacle(
-        id: id,
-        type: ObstacleType.square,
-        center: current.center,
-        sideMeters: side,
-        finalized: false,
       );
     });
   }
@@ -401,13 +381,27 @@ class MissionRepository extends StateNotifier<MissionState> {
   }
 
   Obstacle _obstacleAt(Obstacle current, LatLng center) {
+    if (current.type == ObstacleType.polygon) {
+      final from = current.center;
+      if (from == null) {
+        return current;
+      }
+      final shift = offsetMeters(from, center);
+      return Obstacle(
+        id: current.id,
+        type: ObstacleType.polygon,
+        center: center,
+        vertices: [
+          for (final vertex in current.vertices)
+            shiftByMeters(vertex, shift.$1, shift.$2),
+        ],
+      );
+    }
     return Obstacle(
       id: current.id,
-      type: current.type,
+      type: ObstacleType.circle,
       center: center,
       radiusMeters: current.radiusMeters,
-      sideMeters: current.sideMeters,
-      finalized: current.finalized,
     );
   }
 
@@ -422,32 +416,6 @@ class MissionRepository extends StateNotifier<MissionState> {
       return;
     }
     scheduleCoverage();
-  }
-
-  void saveObstacle(String id) {
-    final index = state.obstacles.indexWhere((obstacle) => obstacle.id == id);
-    if (index == -1) {
-      return;
-    }
-    final current = state.obstacles[index];
-    if (current.type != ObstacleType.square || current.finalized) {
-      return;
-    }
-    state = state.copyWith(
-      obstacles: List.unmodifiable([
-        for (final obstacle in state.obstacles)
-          if (obstacle.id == id)
-            Obstacle(
-              id: id,
-              type: ObstacleType.square,
-              center: current.center,
-              sideMeters: current.sideMeters,
-              finalized: true,
-            )
-          else
-            obstacle,
-      ]),
-    );
   }
 
   void removeObstacle(String id) {
@@ -722,7 +690,6 @@ class MissionRepository extends StateNotifier<MissionState> {
     final pathSections = <int>[];
     final pathPumps = <List<bool>>[];
     final planningSections = <List<LatLng>>[];
-    final loopedObstacles = <String>{};
     var blockedByObstacle = false;
     for (var sectionIndex = 0; sectionIndex < sections.length; sectionIndex++) {
       final section = sections[sectionIndex];
@@ -769,7 +736,6 @@ class MissionRepository extends StateNotifier<MissionState> {
               paths: paths,
               pathSections: pathSections,
               pathPumps: pathPumps,
-              loopedObstacles: loopedObstacles,
             );
             if (_joinsAtStart(piece.$1, piece.$2, resume)) {
               pieceStart = resume;
@@ -787,7 +753,6 @@ class MissionRepository extends StateNotifier<MissionState> {
                 paths: paths,
                 pathSections: pathSections,
                 pathPumps: pathPumps,
-                loopedObstacles: loopedObstacles,
               );
               if (_joinsAtStart(piece.$1, piece.$2, resume)) {
                 pieceStart = resume;
@@ -882,21 +847,14 @@ class MissionRepository extends StateNotifier<MissionState> {
     required List<List<LatLng>> paths,
     required List<int> pathSections,
     required List<List<bool>> pathPumps,
-    required Set<String> loopedObstacles,
   }) {
     final blocker = _obstacleBetween(from, to);
-    final bend = blocker?.routeAround(
+    final route = blocker?.routeAround(
           from,
           to,
           insideField: (point) => boundaryContains(section, point),
         ) ??
         [from, to];
-    final route = _outlineThenBend(
-      blocker: blocker,
-      bend: bend,
-      section: section,
-      loopedObstacles: loopedObstacles,
-    );
     if (route.length >= 2) {
       _pullEndBack(lines, paths, route.first);
     }
@@ -915,28 +873,6 @@ class MissionRepository extends StateNotifier<MissionState> {
     return route.last;
   }
 
-  /// The first time a pass meets an obstacle, draw that obstacle's whole
-  /// outline, then continue along the short side to the other end of the pass.
-  List<LatLng> _outlineThenBend({
-    required Obstacle? blocker,
-    required List<LatLng> bend,
-    required List<LatLng> section,
-    required Set<String> loopedObstacles,
-  }) {
-    if (blocker == null ||
-        blocker.type == ObstacleType.circle ||
-        bend.length < 3 ||
-        !loopedObstacles.add(blocker.id)) {
-      return bend;
-    }
-    final loop = blocker.routeLoop(bend.first);
-    if (loop.length < 4 || !loop.every((point) => boundaryContains(section, point))) {
-      loopedObstacles.remove(blocker.id);
-      return bend;
-    }
-    return [...loop, ...bend.skip(1)];
-  }
-
   /// Draws the straight parts of a pass-to-pass link, and bends only the
   /// stretch that actually enters a no-fly zone.
   LatLng _bridgeLink({
@@ -949,7 +885,6 @@ class MissionRepository extends StateNotifier<MissionState> {
     required List<List<LatLng>> paths,
     required List<int> pathSections,
     required List<List<bool>> pathPumps,
-    required Set<String> loopedObstacles,
   }) {
     if (link.isEmpty) {
       return _spliceDetour(
@@ -961,7 +896,6 @@ class MissionRepository extends StateNotifier<MissionState> {
         paths: paths,
         pathSections: pathSections,
         pathPumps: pathPumps,
-        loopedObstacles: loopedObstacles,
       );
     }
     const distance = Distance();
@@ -978,7 +912,6 @@ class MissionRepository extends StateNotifier<MissionState> {
           paths: paths,
           pathSections: pathSections,
           pathPumps: pathPumps,
-          loopedObstacles: loopedObstacles,
         );
         if (_joinsAtStart(part.$1, part.$2, resume)) {
           partStart = resume;
