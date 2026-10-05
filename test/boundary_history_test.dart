@@ -207,10 +207,6 @@ void main() {
   });
 }
 
-IconButton _historyButton(WidgetTester tester, String tooltip) {
-  return tester.widget<IconButton>(
-    find.byWidgetPredicate(
-      (widget) => widget is IconButton && widget.tooltip == tooltip,
-    ),
-  );
+TextButton _historyButton(WidgetTester tester, String label) {
+  return tester.widget<TextButton>(find.widgetWithText(TextButton, label));
 }

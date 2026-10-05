@@ -88,13 +88,39 @@ void main() {
       await tester.tap(barText('Boundaries'));
       await tester.pump();
       expect(find.text('Reset'), findsOneWidget);
+      expect(find.text('Undo'), findsOneWidget);
+      expect(find.text('Redo'), findsOneWidget);
+      expect(find.byIcon(Icons.undo), findsOneWidget);
+      expect(find.byIcon(Icons.redo), findsOneWidget);
       expect(find.text('Add Obstacle'), findsNothing);
-      _expectSheetWithinCap(tester);
+      expect(find.byKey(const Key('ground-plan-sheet')), findsNothing);
+      final undo = tester.widget<TextButton>(find.widgetWithText(TextButton, 'Undo'));
+      final redo = tester.widget<TextButton>(find.widgetWithText(TextButton, 'Redo'));
+      expect(undo.onPressed, isNull);
+      expect(redo.onPressed, isNull);
+      final undoSize = tester.getSize(find.widgetWithText(TextButton, 'Undo'));
+      expect(undoSize.height, greaterThanOrEqualTo(48));
+      expect(undoSize.width, greaterThanOrEqualTo(64));
+      final undoColor = tester.widget<Text>(find.text('Undo')).style?.color;
+      expect(undoColor, isNotNull);
+      expect(undoColor!.a, greaterThan(0.3));
+      expect(undoColor.a, lessThan(0.7));
+      final reset = tester.widget<FilledButton>(find.widgetWithText(FilledButton, 'Reset'));
+      expect(reset.style?.backgroundColor?.resolve({}), Colors.red);
+      final page = tester.getSize(find.byType(GroundPlanPage));
+      final box = tester.getRect(find.byKey(const Key('ground-plan-boundary-box')));
+      final undoRect = tester.getRect(find.widgetWithText(TextButton, 'Undo'));
+      final redoRect = tester.getRect(find.widgetWithText(TextButton, 'Redo'));
+      final resetRect = tester.getRect(find.widgetWithText(FilledButton, 'Reset'));
+      expect(box.width, lessThan(page.width * 0.5));
+      expect(box.contains(undoRect.center), isTrue);
+      expect(box.contains(redoRect.center), isTrue);
+      expect(box.contains(resetRect.center), isTrue);
+      expect(redoRect.left, greaterThan(undoRect.left));
+      expect(resetRect.left, greaterThan(redoRect.left));
+      expect(resetRect.width, lessThan(page.width * 0.25));
 
-      await tester.drag(
-        find.byKey(const Key('ground-plan-sheet-handle')),
-        const Offset(0, 160),
-      );
+      await tester.tap(barText('Boundaries'));
       await tester.pump();
       expect(find.text('Reset'), findsNothing);
 
@@ -103,19 +129,22 @@ void main() {
 
       await tester.tap(barText('Obstacles'));
       await tester.pump();
-      expect(find.text('Add Obstacle'), findsOneWidget);
+      expect(find.text('Circle'), findsOneWidget);
+      expect(find.text('Polygon'), findsOneWidget);
+      expect(find.text('Add Obstacle'), findsNothing);
       expect(find.text('Reset'), findsNothing);
+      expect(find.byKey(const Key('ground-plan-sheet')), findsNothing);
 
       await tester.tap(barText('Obstacles'));
       await tester.pump();
-      expect(find.text('Add Obstacle'), findsNothing);
+      expect(find.text('Circle'), findsNothing);
       expect(find.text('Call for Job'), findsOneWidget);
       expect(tester.takeException(), isNull);
     }
   });
 
   testWidgets('every ground plan sheet stays under the compact cap', (tester) async {
-    const sections = ['Boundaries', 'Split', 'Obstacles', 'Waypoints', 'History'];
+    const sections = ['Waypoints', 'History'];
     for (final size in [const Size(1200, 800), const Size(667, 375)]) {
       await pumpRoute(tester, size, '/ground-plan');
       final pageHeight = tester.getSize(find.byType(GroundPlanPage)).height;
@@ -138,13 +167,17 @@ void main() {
       expect(scrollable, findsOneWidget);
       expect(tester.state<ScrollableState>(scrollable).position.maxScrollExtent, greaterThan(0));
 
-      if (cap > 180) {
-        await tester.tap(barText('Boundaries'));
-        await tester.pump();
-        await tester.pump();
-        final sheetHeight = tester.getSize(find.byKey(const Key('ground-plan-sheet'))).height;
-        expect(sheetHeight, lessThan(cap * 0.7));
-      }
+      await tester.tap(barText('Boundaries'));
+      await tester.pump();
+      expect(find.byKey(const Key('ground-plan-sheet')), findsNothing);
+      expect(find.byKey(const Key('ground-plan-boundary-box')), findsOneWidget);
+
+      await tester.tap(barText('Split'));
+      await tester.pump();
+      final splitBox = tester.getSize(find.byKey(const Key('ground-plan-split-box')));
+      expect(splitBox.width, lessThanOrEqualTo(pageHeight > 0 ? tester.getSize(find.byType(GroundPlanPage)).width * 0.7 : splitBox.width));
+      expect(splitBox.width, lessThanOrEqualTo(360 + 1));
+      expect(find.byKey(const Key('ground-plan-sheet')), findsNothing);
       expect(tester.takeException(), isNull);
     }
   });
@@ -182,8 +215,10 @@ void main() {
       await tester.pump();
       expect(find.text('Reset'), findsOneWidget);
       final openButton = tester.getRect(_rtlButton());
-      final sheet = tester.getRect(find.byKey(const Key('ground-plan-sheet')));
-      expect(openButton.bottom, lessThanOrEqualTo(sheet.top));
+      final resetRect = tester.getRect(find.widgetWithText(FilledButton, 'Reset'));
+      expect(resetRect.center.dx, lessThan(page.center.dx));
+      expect(openButton.center.dx, greaterThan(page.center.dx));
+      expect(openButton.overlaps(resetRect), isFalse);
 
       await tester.tap(_rtlButton());
       await tester.pump();

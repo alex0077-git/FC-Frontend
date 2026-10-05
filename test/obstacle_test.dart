@@ -317,60 +317,68 @@ void main() {
       tester.element(find.byType(GroundPlanPage)),
     ).read(groundPlanSectionProvider.notifier).open(GroundPlanSection.obstacles);
     await tester.pump();
-    await tester.tap(find.text('Add Obstacle'));
-    await tester.pump();
+    expect(find.text('Add Obstacle'), findsNothing);
     expect(find.text('Circle'), findsOneWidget);
     expect(find.text('Polygon'), findsOneWidget);
     expect(find.text('Square'), findsNothing);
+    expect(find.text('Radius'), findsNothing);
+    expect(repository.state.obstacles, isEmpty);
+
+    await tester.ensureVisible(find.text('Circle'));
+    await tester.tap(find.text('Circle'));
+    await tester.pump();
+    expect(find.text('Circle'), findsNothing);
+    expect(find.text('Polygon'), findsNothing);
+    expect(find.text('Radius'), findsOneWidget);
+    expect(find.text('Position'), findsOneWidget);
+    expect(find.text('Undo'), findsOneWidget);
+    expect(find.text('Redo'), findsOneWidget);
+    expect(find.text('Reset'), findsOneWidget);
+    expect(find.text('OK'), findsOneWidget);
+    expect(repository.state.obstacles, isEmpty);
+
+    await tester.ensureVisible(find.text('Reset'));
+    await tester.tap(find.text('Reset'));
+    await tester.pump();
+    expect(find.text('Circle'), findsNothing);
+    expect(find.text('Polygon'), findsNothing);
+    expect(find.text('Radius'), findsOneWidget);
+    expect(repository.state.obstacles, isEmpty);
+
+    final section = ProviderScope.containerOf(
+      tester.element(find.byType(GroundPlanPage)),
+    ).read(groundPlanSectionProvider.notifier);
+    section.close();
+    await tester.pump();
+    section.open(GroundPlanSection.obstacles);
+    await tester.pump();
+    expect(find.text('Circle'), findsOneWidget);
+    expect(find.text('Polygon'), findsOneWidget);
+    expect(find.text('Radius'), findsNothing);
 
     await tester.ensureVisible(find.text('Polygon'));
     await tester.tap(find.text('Polygon'));
     await tester.pump();
-    expect(
-      tester.widget<FilledButton>(find.widgetWithText(FilledButton, 'Close Shape')).onPressed,
-      isNull,
-    );
-
-    final polygonId = repository.addPolygonObstacle([
-      const LatLng(12.971, 77.591),
-      const LatLng(12.971, 77.593),
-      const LatLng(12.973, 77.593),
-      const LatLng(12.973, 77.591),
-    ]);
-    await tester.pump();
-    await tester.ensureVisible(find.text('Polygon zone'));
-    await tester.tap(find.text('Polygon zone'));
-    await tester.pump();
+    expect(find.text('Circle'), findsNothing);
+    expect(find.text('Polygon'), findsNothing);
     expect(find.text('Radius'), findsNothing);
     expect(find.text('Side'), findsNothing);
     expect(find.text('Save'), findsNothing);
     expect(find.text('Position'), findsOneWidget);
-
-    final polygonBefore = [
-      for (final vertex in repository.state.obstacles.single.vertices) vertex,
-    ];
-    final moveEast = find.byWidgetPredicate(
-      (widget) => widget is IconButton && widget.tooltip == 'Move east',
+    expect(
+      tester.widget<FilledButton>(find.widgetWithText(FilledButton, 'OK')).onPressed,
+      isNull,
     );
-    await tester.ensureVisible(moveEast);
-    await tester.tap(moveEast);
-    await tester.pump();
-    expect(repository.state.obstacles.single.vertices, hasLength(4));
-    for (var index = 0; index < polygonBefore.length; index++) {
-      final shift = _xy(
-        repository.state.obstacles.single.vertices[index],
-        polygonBefore[index],
-      );
-      expect(shift.$1, closeTo(0.5, 0.05));
-      expect(shift.$2, closeTo(0, 0.05));
-    }
-    expect(find.text('0.5'), findsOneWidget);
+    expect(repository.state.obstacles, isEmpty);
 
-    repository.addCircleObstacle(const LatLng(12.973, 77.593));
+    section.close();
     await tester.pump();
-    await tester.ensureVisible(find.text('Circle zone'));
-    await tester.tap(find.text('Circle zone'));
+    section.open(GroundPlanSection.obstacles);
     await tester.pump();
+    await tester.ensureVisible(find.text('Circle'));
+    await tester.tap(find.text('Circle'));
+    await tester.pump();
+    expect(find.text('Circle'), findsNothing);
     expect(find.text('Radius'), findsOneWidget);
     final increaseRadius = find.byWidgetPredicate(
       (widget) => widget is IconButton && widget.tooltip == 'Increase radius',
@@ -379,66 +387,58 @@ void main() {
     await tester.pump();
     await tester.tap(increaseRadius);
     await tester.pump();
-    expect(
-      repository.state.obstacles
-          .firstWhere((obstacle) => obstacle.id != polygonId)
-          .radiusMeters,
-      11,
-    );
-
-    final circle = repository.state.obstacles.firstWhere(
-      (obstacle) => obstacle.id != polygonId,
-    );
-    await repository.generateCoverage(marginMeters: 0, spacingMeters: 20, orientationDegrees: 0);
+    expect(find.text('11 m'), findsOneWidget);
+    await tester.ensureVisible(find.text('Undo'));
+    await tester.tap(find.text('Undo'));
     await tester.pump();
-    final circleBefore = circle.center!;
-    await tester.ensureVisible(find.text('Position'));
+    expect(find.text('10 m'), findsOneWidget);
+    await tester.ensureVisible(find.text('Redo'));
+    await tester.tap(find.text('Redo'));
     await tester.pump();
-    await tester.tap(find.text('Position'));
-    await tester.pump();
-    final moveCircleEast = find.byWidgetPredicate(
+    expect(find.text('11 m'), findsOneWidget);
+    final moveEast = find.byWidgetPredicate(
       (widget) => widget is IconButton && widget.tooltip == 'Move east',
     );
-    await tester.ensureVisible(moveCircleEast);
+    await tester.ensureVisible(moveEast);
+    await tester.tap(moveEast);
     await tester.pump();
-    await tester.tap(moveCircleEast);
-    await tester.pump();
-    final movedCircle = repository.state.obstacles.firstWhere(
-      (obstacle) => obstacle.id != polygonId,
-    );
-    expect(movedCircle.radiusMeters, 11);
-    expect(movedCircle.type, ObstacleType.circle);
-    final circleShift = _xy(movedCircle.center!, circleBefore);
-    expect(circleShift.$1, closeTo(0.5, 0.05));
-    expect(circleShift.$2, closeTo(0, 0.05));
-    _expectOutside(repository.state.coveragePaths, movedCircle);
     expect(find.text('0.5'), findsOneWidget);
+    expect(repository.state.obstacles, isEmpty);
 
     await tester.ensureVisible(find.text('OK'));
-    await tester.pump();
     await tester.tap(find.text('OK'));
     await tester.pump();
-    expect(find.text('0.0'), findsNWidgets(2));
+    expect(find.text('Radius'), findsNothing);
+    expect(find.text('Circle'), findsNothing);
+    expect(find.text('OK'), findsNothing);
+    expect(repository.state.obstacles, hasLength(1));
+    final saved = repository.state.obstacles.single;
+    expect(saved.type, ObstacleType.circle);
+    expect(saved.radiusMeters, 11);
+    final anchor = Obstacle.centerOf([
+      const LatLng(12.970, 77.590),
+      const LatLng(12.970, 77.595),
+      const LatLng(12.974, 77.595),
+    ]);
+    final shift = _xy(saved.center!, anchor);
+    expect(shift.$1, closeTo(0.5, 0.05));
+    expect(shift.$2, closeTo(0, 0.05));
 
-    final committed = repository.state.obstacles.firstWhere(
-      (obstacle) => obstacle.id != polygonId,
-    ).center!;
-    await tester.ensureVisible(moveCircleEast);
+    ProviderScope.containerOf(
+      tester.element(find.byType(GroundPlanPage)),
+    ).read(groundPlanSectionProvider.notifier).open(GroundPlanSection.obstacles);
     await tester.pump();
-    await tester.tap(moveCircleEast);
+    await tester.tap(find.text('Circle'));
     await tester.pump();
-    expect(find.text('0.5'), findsOneWidget);
-    await tester.ensureVisible(find.text('Cancel'));
-    await tester.pump();
-    await tester.tap(find.text('Cancel'));
-    await tester.pump();
-    final restored = repository.state.obstacles.firstWhere(
-      (obstacle) => obstacle.id != polygonId,
-    );
-    expect(_samePoint(restored.center!, committed), isTrue);
-    expect(restored.radiusMeters, 11);
+    expect(find.text('Circle'), findsNothing);
     expect(find.text('Radius'), findsOneWidget);
-    expect(find.text('Position'), findsOneWidget);
+    ProviderScope.containerOf(
+      tester.element(find.byType(GroundPlanPage)),
+    ).read(groundPlanSectionProvider.notifier).close();
+    await tester.pump();
+    expect(repository.state.obstacles, hasLength(1));
+    expect(find.text('Radius'), findsNothing);
+    expect(find.text('Circle'), findsNothing);
     await tester.pump(const Duration(milliseconds: 100));
   });
 

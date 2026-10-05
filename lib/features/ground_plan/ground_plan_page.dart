@@ -10,6 +10,7 @@ import 'package:fc_frontend/data/models/boundary_point.dart';
 import 'package:fc_frontend/data/models/flight_log.dart';
 import 'package:fc_frontend/data/models/job_config.dart';
 import 'package:fc_frontend/data/models/mission.dart';
+import 'package:fc_frontend/data/models/obstacle.dart';
 import 'package:fc_frontend/data/models/waypoint.dart';
 import 'package:fc_frontend/data/repositories/mission_repository.dart';
 import 'package:fc_frontend/data/repositories/telemetry_repository.dart';
@@ -18,6 +19,7 @@ import 'package:fc_frontend/features/ground_plan/boundary_point_dialog.dart';
 import 'package:fc_frontend/features/ground_plan/ground_plan_section.dart';
 import 'package:fc_frontend/features/ground_plan/boundary_point_marker.dart';
 import 'package:fc_frontend/features/ground_plan/obstacle_mapping_section.dart';
+import 'package:fc_frontend/features/ground_plan/plan_history_button.dart';
 import 'package:fc_frontend/features/ground_plan/waypoint_path.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -62,8 +64,14 @@ class _GroundPlanPageState extends ConsumerState<GroundPlanPage> {
   bool _mappingObstacles = false;
   ObstacleTool? _obstacleTool;
   String? _selectedObstacleId;
-  LatLng? _obstacleMoveOrigin;
   List<LatLng> _polygonDraft = [];
+  LatLng? _polygonMoveOrigin;
+  LatLng? _draftCircleCenter;
+  LatLng? _draftCircleOrigin;
+  LatLng? _draftCircleBaseline;
+  double _draftCircleRadius = Obstacle.defaultRadiusMeters;
+  final List<_ObstacleDraft> _obstacleUndo = [];
+  final List<_ObstacleDraft> _obstacleRedo = [];
 
   @override
   void dispose() {
@@ -82,6 +90,18 @@ class _GroundPlanPageState extends ConsumerState<GroundPlanPage> {
         !mission.boundaryEditingLocked && mission.undoHistory.isNotEmpty;
     final canRedo =
         !mission.boundaryEditingLocked && mission.redoHistory.isNotEmpty;
+    ref.listen(groundPlanSectionProvider, (previous, next) {
+      final leftObstacles = previous?.section == GroundPlanSection.obstacles &&
+          next.section != GroundPlanSection.obstacles;
+      if (!leftObstacles || !_hasObstacleDraft) {
+        return;
+      }
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          setState(_clearObstacleMapping);
+        }
+      });
+    });
     ref.listen(missionRepositoryProvider, (previous, next) {
       final becameBlocked = next.coverageBlockedByObstacle &&
           previous?.coverageBlockedByObstacle != true;
@@ -113,29 +133,111 @@ class _GroundPlanPageState extends ConsumerState<GroundPlanPage> {
         child: Scaffold(
           body: LayoutBuilder(
             builder: (context, constraints) {
-              final sheetMax = openSection == null
-                  ? 0.0
-                  : _groundPlanSheetCap(constraints.maxHeight);
+              final sheetSection = openSection == GroundPlanSection.waypoints ||
+                  openSection == GroundPlanSection.history;
+              final sheetMax = sheetSection
+                  ? _groundPlanSheetCap(constraints.maxHeight)
+                  : 0.0;
+              final toolAtTop = hasCoverage;
+              final toolBottom = toolAtTop ? null : sheetMax + 8;
+              final toolTop = toolAtTop ? 12.0 : null;
               final controlsMax = (constraints.maxHeight - sheetMax - 16)
                   .clamp(96.0, 440.0);
+              final toolMaxHeight = controlsMax.clamp(120.0, 240.0);
               final controlsWidth = (constraints.maxWidth - 168).clamp(220.0, 360.0);
               return Stack(
                 children: [
-                  Positioned.fill(child: _planMap(mission)),
-                  if (openSection != null)
+                  Positioned.fill(child: _planMap(mission, openSection)),
+                  if (openSection == GroundPlanSection.boundary)
+                    Positioned(
+                      left: 8,
+                      right: 8,
+                      top: toolTop,
+                      bottom: toolBottom,
+                      child: Align(
+                        alignment: toolAtTop ? Alignment.topLeft : Alignment.bottomLeft,
+                        child: _BoundaryCompact(
+                          canUndo: canUndo,
+                          canRedo: canRedo,
+                          onUndo: _undoBoundary,
+                          onRedo: _redoBoundary,
+                          onReset: _resetBoundary,
+                        ),
+                      ),
+                    ),
+                  if (openSection == GroundPlanSection.split)
+                    Positioned(
+                      left: 8,
+                      top: toolTop,
+                      bottom: toolBottom,
+                      width: controlsWidth,
+                      child: Align(
+                        alignment: toolAtTop ? Alignment.topLeft : Alignment.bottomLeft,
+                        child: _CompactScroll(
+                          maxHeight: toolMaxHeight,
+                          child: Material(
+                            key: const Key('ground-plan-split-box'),
+                            color: AppTheme.surface,
+                            elevation: 4,
+                            borderRadius: const BorderRadius.all(Radius.circular(12)),
+                            child: Padding(
+                              padding: const EdgeInsets.all(8),
+                              child: _sectionContent(
+                                section: GroundPlanSection.split,
+                                mission: mission,
+                                selected: selected,
+                                canUndo: canUndo,
+                                canRedo: canRedo,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  if (openSection == GroundPlanSection.obstacles)
+                    Positioned(
+                      left: 8,
+                      top: toolTop,
+                      bottom: toolBottom,
+                      width: controlsWidth,
+                      child: Align(
+                        alignment: toolAtTop ? Alignment.topLeft : Alignment.bottomLeft,
+                        child: _CompactScroll(
+                          maxHeight: toolMaxHeight,
+                          child: Material(
+                            key: const Key('ground-plan-obstacle-box'),
+                            color: AppTheme.surface,
+                            elevation: 4,
+                            borderRadius: const BorderRadius.all(Radius.circular(12)),
+                            child: Padding(
+                              padding: const EdgeInsets.all(8),
+                              child: _sectionContent(
+                                section: GroundPlanSection.obstacles,
+                                mission: mission,
+                                selected: selected,
+                                canUndo: canUndo,
+                                canRedo: canRedo,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  if (openSection == GroundPlanSection.waypoints ||
+                      openSection == GroundPlanSection.history)
                     Positioned(
                       left: 0,
                       right: 0,
                       bottom: 0,
                       child: _SectionPanel(
                         key: ValueKey(openSection),
-                        title: _sectionTitle(openSection),
+                        title: _sectionTitle(openSection!),
                         maxHeight: sheetMax,
                         onClose: () {
                           ref.read(groundPlanSectionProvider.notifier).close();
                         },
                         child: _sectionContent(
-                          section: openSection,
+                          section: openSection!,
                           mission: mission,
                           selected: selected,
                           canUndo: canUndo,
@@ -193,7 +295,7 @@ class _GroundPlanPageState extends ConsumerState<GroundPlanPage> {
     );
   }
 
-  Widget _planMap(MissionState mission) {
+  Widget _planMap(MissionState mission, GroundPlanSection? openSection) {
     final savedSplit = mission.splits.isEmpty ? null : mission.splits.last;
     return _PlanMap(
       controller: _mapController,
@@ -208,6 +310,7 @@ class _GroundPlanPageState extends ConsumerState<GroundPlanPage> {
       obstacleMapping: _mappingObstacles,
       obstacleTool: _obstacleTool,
       polygonDraft: _polygonDraft,
+      previewObstacle: _previewObstacle(openSection),
       selectedObstacleId: _selectedObstacleId,
       onMarkSplit: _markSplit,
       editingEnabled: !mission.boundaryEditingLocked,
@@ -274,39 +377,22 @@ class _GroundPlanPageState extends ConsumerState<GroundPlanPage> {
             ),
           ],
         ),
-      GroundPlanSection.obstacles => Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            OutlinedButton(
-              style: OutlinedButton.styleFrom(
-                minimumSize: const Size.fromHeight(44),
-                backgroundColor: _mappingObstacles
-                    ? Colors.red.withValues(alpha: 0.12)
-                    : null,
-              ),
-              onPressed: _toggleObstacleMapping,
-              child: const Text('Add Obstacle'),
-            ),
-            const SizedBox(height: 8),
-            ObstacleMappingSection(
-              choosing: _mappingObstacles,
-              tool: _obstacleTool,
-              obstacles: mission.obstacles,
-              selectedId: _selectedObstacleId,
-              polygonPoints: _polygonDraft.length,
-              onCircle: () => _chooseObstacleTool(ObstacleTool.circle),
-              onPolygon: () => _chooseObstacleTool(ObstacleTool.polygon),
-              onCloseShape: _closePolygon,
-              onSelect: (id) => _selectObstacle(id, mission),
-              onRadius: _setObstacleRadius,
-              onRemove: _removeSelectedObstacle,
-              eastOffsetMeters: _obstacleOffset(mission).$1,
-              northOffsetMeters: _obstacleOffset(mission).$2,
-              onNudge: _nudgeSelectedObstacle,
-              onOk: () => _commitObstacleMove(mission),
-              onCancel: _cancelObstacleMove,
-            ),
-          ],
+      GroundPlanSection.obstacles => ObstacleMappingSection(
+          tool: _obstacleTool,
+          polygonPoints: _polygonDraft.length,
+          radiusMeters: _draftCircleRadius,
+          canUndo: _obstacleUndo.isNotEmpty,
+          canRedo: _obstacleRedo.isNotEmpty,
+          eastOffsetMeters: _draftOffset().$1,
+          northOffsetMeters: _draftOffset().$2,
+          onCircle: () => _chooseObstacleTool(ObstacleTool.circle),
+          onPolygon: () => _chooseObstacleTool(ObstacleTool.polygon),
+          onRadius: _setObstacleRadius,
+          onNudge: _nudgeSelectedObstacle,
+          onUndo: _undoObstacleDraft,
+          onRedo: _redoObstacleDraft,
+          onReset: _resetObstacleDraft,
+          onOk: _confirmObstacle,
         ),
       GroundPlanSection.waypoints => Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -349,16 +435,20 @@ class _GroundPlanPageState extends ConsumerState<GroundPlanPage> {
   }
 
   void _onMapTap(TapPosition tapPosition, LatLng point) {
-    final sheetOpen = ref.read(groundPlanSectionProvider).section != null;
-    final placing = _mappingObstacles ||
+    final section = ref.read(groundPlanSectionProvider).section;
+    final placingPolygon = section == GroundPlanSection.obstacles &&
+        _obstacleTool == ObstacleTool.polygon;
+    final placing = placingPolygon ||
         _placement == _MapPlacement.pointA ||
         _placement == _MapPlacement.pointB ||
         _placement == _MapPlacement.split;
+    final sheetOpen = section == GroundPlanSection.waypoints ||
+        section == GroundPlanSection.history;
     if (sheetOpen && !placing) {
       ref.read(groundPlanSectionProvider.notifier).close();
       return;
     }
-    if (_mappingObstacles) {
+    if (section == GroundPlanSection.obstacles) {
       _onObstacleTap(point);
       return;
     }
@@ -393,29 +483,36 @@ class _GroundPlanPageState extends ConsumerState<GroundPlanPage> {
     });
   }
 
-  void _toggleObstacleMapping() {
-    setState(() {
-      if (_mappingObstacles) {
-        _clearObstacleMapping();
-      } else {
-        _clearSplitDraft();
-        _placement = _MapPlacement.boundary;
-        _mappingObstacles = true;
-      }
-    });
-  }
+  bool get _hasObstacleDraft =>
+      _obstacleTool != null ||
+      _polygonDraft.isNotEmpty ||
+      _draftCircleCenter != null;
 
   void _chooseObstacleTool(ObstacleTool tool) {
+    if (_obstacleTool == tool) {
+      return;
+    }
     setState(() {
       _clearSplitDraft();
       _placement = _MapPlacement.boundary;
       _mappingObstacles = true;
-      if (_obstacleTool != tool) {
-        _polygonDraft = [];
+      _selectedObstacleId = null;
+      _polygonDraft = [];
+      _polygonMoveOrigin = null;
+      _obstacleUndo.clear();
+      _obstacleRedo.clear();
+      if (tool == ObstacleTool.circle) {
+        final anchor = _draftAnchor();
+        _draftCircleCenter = anchor;
+        _draftCircleOrigin = anchor;
+        _draftCircleBaseline = anchor;
+        _draftCircleRadius = Obstacle.defaultRadiusMeters;
+      } else {
+        _draftCircleCenter = null;
+        _draftCircleOrigin = null;
+        _draftCircleBaseline = null;
       }
       _obstacleTool = tool;
-      _selectedObstacleId = null;
-      _obstacleMoveOrigin = null;
     });
   }
 
@@ -423,131 +520,191 @@ class _GroundPlanPageState extends ConsumerState<GroundPlanPage> {
     _mappingObstacles = false;
     _obstacleTool = null;
     _selectedObstacleId = null;
-    _obstacleMoveOrigin = null;
     _polygonDraft = [];
+    _polygonMoveOrigin = null;
+    _draftCircleCenter = null;
+    _draftCircleOrigin = null;
+    _draftCircleBaseline = null;
+    _draftCircleRadius = Obstacle.defaultRadiusMeters;
+    _obstacleUndo.clear();
+    _obstacleRedo.clear();
   }
 
-  void _selectObstacle(String id, MissionState mission) {
+  _ObstacleDraft _captureObstacleDraft() {
+    return _ObstacleDraft(
+      circleCenter: _draftCircleCenter,
+      circleOrigin: _draftCircleOrigin,
+      circleRadius: _draftCircleRadius,
+      polygon: List<LatLng>.from(_polygonDraft),
+      polygonMoveOrigin: _polygonMoveOrigin,
+    );
+  }
+
+  void _restoreObstacleDraft(_ObstacleDraft draft) {
+    _draftCircleCenter = draft.circleCenter;
+    _draftCircleOrigin = draft.circleOrigin;
+    _draftCircleRadius = draft.circleRadius;
+    _polygonDraft = List<LatLng>.from(draft.polygon);
+    _polygonMoveOrigin = draft.polygonMoveOrigin;
+  }
+
+  void _rememberObstacleDraft() {
+    _obstacleRedo.clear();
+    _obstacleUndo.add(_captureObstacleDraft());
+    if (_obstacleUndo.length > 40) {
+      _obstacleUndo.removeAt(0);
+    }
+  }
+
+  void _undoObstacleDraft() {
+    if (_obstacleUndo.isEmpty) {
+      return;
+    }
     setState(() {
-      _selectedObstacleId = id;
-      _obstacleMoveOrigin = _centerOf(mission, id);
+      _obstacleRedo.add(_captureObstacleDraft());
+      _restoreObstacleDraft(_obstacleUndo.removeLast());
     });
+  }
+
+  void _redoObstacleDraft() {
+    if (_obstacleRedo.isEmpty) {
+      return;
+    }
+    setState(() {
+      _obstacleUndo.add(_captureObstacleDraft());
+      _restoreObstacleDraft(_obstacleRedo.removeLast());
+    });
+  }
+
+  void _resetObstacleDraft() {
+    if (_obstacleTool == null) {
+      return;
+    }
+    setState(() {
+      _obstacleUndo.clear();
+      _obstacleRedo.clear();
+      if (_obstacleTool == ObstacleTool.circle) {
+        _draftCircleCenter = _draftCircleBaseline;
+        _draftCircleOrigin = _draftCircleBaseline;
+        _draftCircleRadius = Obstacle.defaultRadiusMeters;
+      } else {
+        _polygonDraft = [];
+        _polygonMoveOrigin = null;
+      }
+    });
+  }
+
+  LatLng _draftAnchor() {
+    final points = ref.read(missionRepositoryProvider).boundaryPoints;
+    if (points.length >= 3) {
+      return Obstacle.centerOf([
+        for (final point in points) LatLng(point.latitude, point.longitude),
+      ]);
+    }
+    return defaultMapCenter;
+  }
+
+  Obstacle? _previewObstacle(GroundPlanSection? section) {
+    if (section != GroundPlanSection.obstacles) {
+      return null;
+    }
+    if (_obstacleTool == ObstacleTool.circle && _draftCircleCenter != null) {
+      return Obstacle(
+        id: 'draft-circle',
+        type: ObstacleType.circle,
+        center: _draftCircleCenter,
+        radiusMeters: _draftCircleRadius,
+      );
+    }
+    if (_obstacleTool == ObstacleTool.polygon && _polygonDraft.length >= 3) {
+      return Obstacle(
+        id: 'draft-polygon',
+        type: ObstacleType.polygon,
+        center: Obstacle.centerOf(_polygonDraft),
+        vertices: List<LatLng>.unmodifiable(_polygonDraft),
+      );
+    }
+    return null;
+  }
+
+  (double, double) _draftOffset() {
+    if (_obstacleTool == ObstacleTool.circle &&
+        _draftCircleOrigin != null &&
+        _draftCircleCenter != null) {
+      return offsetMeters(_draftCircleOrigin!, _draftCircleCenter!);
+    }
+    if (_obstacleTool == ObstacleTool.polygon &&
+        _polygonMoveOrigin != null &&
+        _polygonDraft.length >= 3) {
+      return offsetMeters(_polygonMoveOrigin!, Obstacle.centerOf(_polygonDraft));
+    }
+    return (0, 0);
   }
 
   void _onObstacleTap(LatLng point) {
-    final repository = ref.read(missionRepositoryProvider.notifier);
-    final hit = repository.obstacleAt(point);
-    if (_obstacleTool == ObstacleTool.circle) {
-      if (hit != null) {
-        _selectObstacle(hit.id, ref.read(missionRepositoryProvider));
-        return;
-      }
-      final id = repository.addCircleObstacle(point);
-      setState(() {
-        _selectedObstacleId = id;
-        _obstacleMoveOrigin = point;
-      });
+    if (_obstacleTool != ObstacleTool.polygon) {
       return;
     }
-    if (_obstacleTool == ObstacleTool.polygon) {
-      if (_polygonDraft.isEmpty && hit != null) {
-        _selectObstacle(hit.id, ref.read(missionRepositoryProvider));
-        return;
-      }
-      setState(() {
-        _polygonDraft = [..._polygonDraft, point];
-        _selectedObstacleId = null;
-        _obstacleMoveOrigin = null;
-      });
-      return;
-    }
-    if (hit != null) {
-      _selectObstacle(hit.id, ref.read(missionRepositoryProvider));
-      return;
-    }
-    _showMessage('Choose Circle or Polygon first.');
-  }
-
-  void _closePolygon() {
-    if (_polygonDraft.length < 3) {
-      return;
-    }
-    final id = ref.read(missionRepositoryProvider.notifier).addPolygonObstacle(
-          _polygonDraft,
-        );
     setState(() {
-      _polygonDraft = [];
-      _selectedObstacleId = id;
-      _obstacleMoveOrigin = _centerOf(ref.read(missionRepositoryProvider), id);
+      _rememberObstacleDraft();
+      _polygonDraft = [..._polygonDraft, point];
+      if (_polygonDraft.length >= 3) {
+        _polygonMoveOrigin = Obstacle.centerOf(_polygonDraft);
+      }
     });
   }
 
-  void _setObstacleRadius(double meters) {
-    final id = _selectedObstacleId;
-    if (id == null) {
+  void _confirmObstacle() {
+    final repository = ref.read(missionRepositoryProvider.notifier);
+    if (_obstacleTool == ObstacleTool.circle && _draftCircleCenter != null) {
+      final id = repository.addCircleObstacle(_draftCircleCenter!);
+      repository.updateObstacleRadius(id, _draftCircleRadius);
+    } else if (_obstacleTool == ObstacleTool.polygon && _polygonDraft.length >= 3) {
+      repository.addPolygonObstacle(_polygonDraft);
+    } else {
       return;
     }
-    ref.read(missionRepositoryProvider.notifier).updateObstacleRadius(id, meters);
+    setState(_clearObstacleMapping);
+    ref.read(groundPlanSectionProvider.notifier).close();
   }
 
-  void _removeSelectedObstacle() {
-    final id = _selectedObstacleId;
-    if (id == null) {
+  void _setObstacleRadius(double meters) {
+    if (_draftCircleCenter == null) {
       return;
     }
-    ref.read(missionRepositoryProvider.notifier).removeObstacle(id);
+    final next = meters
+        .clamp(Obstacle.minSizeMeters, Obstacle.maxSizeMeters)
+        .toDouble();
+    if ((next - _draftCircleRadius).abs() < 0.001) {
+      return;
+    }
     setState(() {
-      _selectedObstacleId = null;
-      _obstacleMoveOrigin = null;
+      _rememberObstacleDraft();
+      _draftCircleRadius = next;
     });
   }
 
   void _nudgeSelectedObstacle(double eastMeters, double northMeters) {
-    final id = _selectedObstacleId;
-    if (id == null) {
-      return;
-    }
-    ref.read(missionRepositoryProvider.notifier).moveObstacle(
-          id,
-          eastMeters: eastMeters,
-          northMeters: northMeters,
+    if (_obstacleTool == ObstacleTool.circle && _draftCircleCenter != null) {
+      setState(() {
+        _rememberObstacleDraft();
+        _draftCircleCenter = shiftByMeters(
+          _draftCircleCenter!,
+          eastMeters,
+          northMeters,
         );
-  }
-
-  void _commitObstacleMove(MissionState mission) {
-    final id = _selectedObstacleId;
-    if (id == null) {
+      });
       return;
     }
-    setState(() => _obstacleMoveOrigin = _centerOf(mission, id));
-  }
-
-  void _cancelObstacleMove() {
-    final id = _selectedObstacleId;
-    final origin = _obstacleMoveOrigin;
-    if (id == null || origin == null) {
-      return;
+    if (_obstacleTool == ObstacleTool.polygon && _polygonDraft.isNotEmpty) {
+      setState(() {
+        _rememberObstacleDraft();
+        _polygonDraft = [
+          for (final point in _polygonDraft)
+            shiftByMeters(point, eastMeters, northMeters),
+        ];
+      });
     }
-    ref.read(missionRepositoryProvider.notifier).placeObstacle(id, origin);
-  }
-
-  (double, double) _obstacleOffset(MissionState mission) {
-    final id = _selectedObstacleId;
-    final origin = _obstacleMoveOrigin;
-    final center = id == null ? null : _centerOf(mission, id);
-    if (origin == null || center == null) {
-      return (0, 0);
-    }
-    return offsetMeters(origin, center);
-  }
-
-  LatLng? _centerOf(MissionState mission, String id) {
-    for (final obstacle in mission.obstacles) {
-      if (obstacle.id == id) {
-        return obstacle.center;
-      }
-    }
-    return null;
   }
 
   void _placeBoundaryPoint(LatLng point) {
@@ -880,6 +1037,7 @@ class _PlanMap extends StatefulWidget {
     required this.obstacleMapping,
     required this.obstacleTool,
     required this.polygonDraft,
+    required this.previewObstacle,
     required this.selectedObstacleId,
     required this.editingEnabled,
     required this.onTap,
@@ -899,6 +1057,7 @@ class _PlanMap extends StatefulWidget {
   final bool obstacleMapping;
   final ObstacleTool? obstacleTool;
   final List<LatLng> polygonDraft;
+  final Obstacle? previewObstacle;
   final String? selectedObstacleId;
   final bool editingEnabled;
   final void Function(TapPosition tapPosition, LatLng point) onTap;
@@ -919,10 +1078,10 @@ class _PlanMapState extends State<_PlanMap> {
   Widget build(BuildContext context) {
     final hint = widget.obstacleMapping
         ? switch (widget.obstacleTool) {
-            ObstacleTool.circle => 'Tap the map to place a circle no-fly zone',
-            ObstacleTool.polygon => widget.polygonDraft.isEmpty
-                ? 'Tap the map to place polygon points'
-                : 'Tap to add the next point, then press Close Shape',
+            ObstacleTool.circle => 'Adjust the circle, then press OK',
+            ObstacleTool.polygon => widget.polygonDraft.length < 3
+                ? 'Tap the map to place each corner, in order'
+                : 'Press OK to keep this no-fly zone',
             null => 'Choose Circle or Polygon',
           }
         : switch (widget.placement) {
@@ -977,21 +1136,13 @@ class _PlanMapState extends State<_PlanMap> {
             if (widget.mission.coverageLines.isEmpty)
               ...waypointPathLine(widget.mission.waypoints),
             ...obstacleMapLayers(
-              obstacles: widget.mission.obstacles,
+              obstacles: [
+                ...widget.mission.obstacles,
+                if (widget.previewObstacle != null) widget.previewObstacle!,
+              ],
               selectedId: widget.selectedObstacleId,
             ),
-            if (widget.polygonDraft.length >= 3)
-              PolygonLayer(
-                polygons: [
-                  Polygon(
-                    points: widget.polygonDraft,
-                    color: Colors.red.withValues(alpha: 0.18),
-                    borderColor: Colors.red,
-                    borderStrokeWidth: 2,
-                  ),
-                ],
-              )
-            else if (widget.polygonDraft.length == 2)
+            if (widget.polygonDraft.length == 2)
               PolylineLayer(
                 polylines: [
                   Polyline(
@@ -1352,6 +1503,135 @@ class _SheetHeader extends StatelessWidget {
   }
 }
 
+/// A floating card that stays only as tall as its contents, up to [maxHeight],
+/// and scrolls when the controls do not fit.
+class _CompactScroll extends StatefulWidget {
+  const _CompactScroll({required this.maxHeight, required this.child});
+
+  final double maxHeight;
+  final Widget child;
+
+  @override
+  State<_CompactScroll> createState() => _CompactScrollState();
+}
+
+class _CompactScrollState extends State<_CompactScroll> {
+  final _key = GlobalKey();
+  double? _height;
+
+  @override
+  void initState() {
+    super.initState();
+    _schedule();
+  }
+
+  @override
+  void didUpdateWidget(covariant _CompactScroll oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _schedule();
+  }
+
+  void _schedule() {
+    WidgetsBinding.instance.addPostFrameCallback((_) => _measure());
+  }
+
+  void _measure() {
+    final box = _key.currentContext?.findRenderObject() as RenderBox?;
+    if (!mounted || box == null || !box.hasSize) {
+      return;
+    }
+    final next = box.size.height.clamp(0.0, widget.maxHeight).toDouble();
+    if (_height == null || (_height! - next).abs() > 1) {
+      setState(() => _height = next);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final content = KeyedSubtree(key: _key, child: widget.child);
+    final height = _height;
+    if (height == null) {
+      return ConstrainedBox(
+        constraints: BoxConstraints(maxHeight: widget.maxHeight),
+        child: SingleChildScrollView(child: content),
+      );
+    }
+    return SizedBox(
+      height: height,
+      child: SingleChildScrollView(child: content),
+    );
+  }
+}
+
+class _BoundaryCompact extends StatelessWidget {
+  const _BoundaryCompact({
+    required this.canUndo,
+    required this.canRedo,
+    required this.onUndo,
+    required this.onRedo,
+    required this.onReset,
+  });
+
+  final bool canUndo;
+  final bool canRedo;
+  final VoidCallback onUndo;
+  final VoidCallback onRedo;
+  final VoidCallback onReset;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      key: const Key('ground-plan-boundary-box'),
+      color: AppTheme.surface,
+      elevation: 4,
+      borderRadius: const BorderRadius.all(Radius.circular(12)),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Boundaries',
+              style: TextStyle(
+                color: AppTheme.text,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                PlanHistoryButton(
+                  label: 'Undo',
+                  icon: Icons.undo,
+                  onPressed: canUndo ? onUndo : null,
+                ),
+                PlanHistoryButton(
+                  label: 'Redo',
+                  icon: Icons.redo,
+                  onPressed: canRedo ? onRedo : null,
+                ),
+                const SizedBox(width: 6),
+                FilledButton(
+                  style: FilledButton.styleFrom(
+                    backgroundColor: Colors.red,
+                    foregroundColor: Colors.white,
+                    minimumSize: const Size(0, 52),
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                  ),
+                  onPressed: onReset,
+                  child: const Text('Reset'),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _BoundaryActions extends StatelessWidget {
   const _BoundaryActions({
     required this.canUndo,
@@ -1369,32 +1649,12 @@ class _BoundaryActions extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      children: [
-        _HistoryButton(
-          tooltip: 'Undo',
-          icon: Icons.undo,
-          onPressed: canUndo ? onUndo : null,
-        ),
-        _HistoryButton(
-          tooltip: 'Redo',
-          icon: Icons.redo,
-          onPressed: canRedo ? onRedo : null,
-        ),
-        const SizedBox(width: 4),
-        Expanded(
-          child: OutlinedButton(
-            style: OutlinedButton.styleFrom(
-              minimumSize: const Size.fromHeight(48),
-            ),
-            onPressed: onReset,
-            child: const FittedBox(
-              fit: BoxFit.scaleDown,
-              child: Text('Reset'),
-            ),
-          ),
-        ),
-      ],
+    return _BoundaryCompact(
+      canUndo: canUndo,
+      canRedo: canRedo,
+      onUndo: onUndo,
+      onRedo: onRedo,
+      onReset: onReset,
     );
   }
 }
@@ -1517,27 +1777,20 @@ class _FieldSplitControls extends StatelessWidget {
   }
 }
 
-class _HistoryButton extends StatelessWidget {
-  const _HistoryButton({
-    required this.tooltip,
-    required this.icon,
-    required this.onPressed,
+class _ObstacleDraft {
+  const _ObstacleDraft({
+    required this.circleCenter,
+    required this.circleOrigin,
+    required this.circleRadius,
+    required this.polygon,
+    required this.polygonMoveOrigin,
   });
 
-  final String tooltip;
-  final IconData icon;
-  final VoidCallback? onPressed;
-
-  @override
-  Widget build(BuildContext context) {
-    return IconButton(
-      tooltip: tooltip,
-      onPressed: onPressed,
-      icon: Icon(icon, size: 20),
-      padding: EdgeInsets.zero,
-      constraints: const BoxConstraints.tightFor(width: 44, height: 44),
-    );
-  }
+  final LatLng? circleCenter;
+  final LatLng? circleOrigin;
+  final double circleRadius;
+  final List<LatLng> polygon;
+  final LatLng? polygonMoveOrigin;
 }
 
 class _PointPairSection extends StatelessWidget {
