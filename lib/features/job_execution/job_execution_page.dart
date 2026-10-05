@@ -3,14 +3,11 @@ import 'package:fc_frontend/core/theme/app_theme.dart';
 import 'package:fc_frontend/core/widgets/coverage_lines.dart';
 import 'package:fc_frontend/core/widgets/obstacle_map_layers.dart';
 import 'package:fc_frontend/features/ground_plan/waypoint_path.dart';
-import 'package:fc_frontend/core/widgets/coverage_adjust_controls.dart';
-import 'package:fc_frontend/core/widgets/responsive.dart';
 import 'package:fc_frontend/data/models/coverage_line.dart';
 import 'package:fc_frontend/data/repositories/mission_repository.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:go_router/go_router.dart';
 import 'package:latlong2/latlong.dart';
 
 
@@ -23,72 +20,21 @@ class JobExecutionPage extends ConsumerStatefulWidget {
 
 class _JobExecutionPageState extends ConsumerState<JobExecutionPage> {
   final MapController _mapController = MapController();
-  int _activeIndex = 0;
 
   @override
   Widget build(BuildContext context) {
     final mission = ref.watch(missionRepositoryProvider);
     final lines = mission.coverageLines;
-    final lineCount = lines.length;
-    final activeIndex = lineCount == 0 ? 0 : _activeIndex.clamp(0, lineCount - 1);
-    final activeLine = lineCount == 0 ? null : lines[activeIndex];
-
-    final map = _JobMap(
-      controller: _mapController,
-      mission: mission,
-      activeIndex: activeIndex,
-      drone: _lineMidpoint(activeLine),
-    );
+    final activeLine = lines.isEmpty ? null : lines.first;
 
     return Scaffold(
-      body: Row(
-        children: [
-          Expanded(flex: 3, child: map),
-          SizedBox(
-            width: Responsive.sidePanelWidth(context, desktopWidth: 300),
-            child: Material(
-              color: AppTheme.surface,
-              child: ListView(
-                padding: const EdgeInsets.all(16),
-                children: [
-                  const _Guidelines(),
-                  const SizedBox(height: 20),
-                  const CoverageAdjustControls(gap: 12),
-                  const SizedBox(height: 16),
-                  Text(
-                    lineCount == 0
-                        ? 'Line 0 of 0'
-                        : 'Line ${activeIndex + 1} of $lineCount',
-                    textAlign: TextAlign.center,
-                    style: Theme.of(context).textTheme.titleMedium,
-                  ),
-                  const SizedBox(height: 8),
-                  FilledButton(
-                    style: FilledButton.styleFrom(
-                      minimumSize: const Size.fromHeight(48),
-                    ),
-                    onPressed: lineCount < 2 ? null : () => _nextLine(lineCount),
-                    child: const Text('Next Line'),
-                  ),
-                  const SizedBox(height: 12),
-                  OutlinedButton(
-                    style: OutlinedButton.styleFrom(
-                      minimumSize: const Size.fromHeight(48),
-                    ),
-                    onPressed: () => context.go('/ground-plan'),
-                    child: const Text('Back to Ground Plan'),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ],
+      body: _JobMap(
+        controller: _mapController,
+        mission: mission,
+        activeIndex: 0,
+        drone: _lineMidpoint(activeLine),
       ),
     );
-  }
-
-  void _nextLine(int lineCount) {
-    setState(() => _activeIndex = (_activeIndex + 1) % lineCount);
   }
 }
 
@@ -102,26 +48,6 @@ LatLng? _lineMidpoint(CoverageLine? line) {
     (start.latitude + end.latitude) / 2,
     (start.longitude + end.longitude) / 2,
   );
-}
-
-class _Guidelines extends StatelessWidget {
-  const _Guidelines();
-
-  @override
-  Widget build(BuildContext context) {
-    return const Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text('Guidelines'),
-        SizedBox(height: 8),
-        Text('Follow the highlighted line'),
-        SizedBox(height: 4),
-        Text('Use the joystick to rotate the lines'),
-        SizedBox(height: 4),
-        Text('Maintain steady altitude'),
-      ],
-    );
-  }
 }
 
 class _JobMap extends StatelessWidget {

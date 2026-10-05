@@ -4,9 +4,9 @@ import 'package:fc_frontend/data/repositories/mission_repository.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-/// The orientation stick, line spacing, and edge margin shared by Ground Plan
-/// and Job Execution. The stick moves on its own; the spray path follows on
-/// the coverage timer.
+/// The orientation stick, line spacing, and edge margin on the Ground Plan
+/// map. The stick moves on its own; the spray path follows on the coverage
+/// timer.
 class CoverageAdjustControls extends ConsumerWidget {
   const CoverageAdjustControls({super.key, this.gap = 8});
 

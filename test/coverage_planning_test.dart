@@ -182,6 +182,49 @@ void main() {
     expect(_lineIsNorthSouth(repo.state.coverageLines.first), isFalse);
     expect(find.text('Edge margin'), findsOneWidget);
   });
+
+  testWidgets('confirm stays on Ground Plan with only the bottom-left box', (
+    tester,
+  ) async {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(1200, 800);
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(
+      ProviderScope(
+        child: MaterialApp(
+          theme: AppTheme.dark,
+          home: const GroundPlanPage(),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    final repo = ProviderScope.containerOf(
+      tester.element(find.byType(GroundPlanPage)),
+    ).read(missionRepositoryProvider.notifier);
+    _addRectangle(repo, const LatLng(12.97, 77.59), halfEast: 40, halfNorth: 20);
+    await tester.pump();
+
+    expect(find.text('Orientation'), findsNothing);
+    await tester.tap(find.text('Call for Job'));
+    await tester.pump();
+    await tester.tap(find.widgetWithText(FilledButton, 'Confirm'));
+    await tester.pump();
+    await tester.pump();
+
+    expect(find.byType(GroundPlanPage), findsOneWidget);
+    expect(find.text('Guidelines'), findsNothing);
+    expect(find.text('Next Line'), findsNothing);
+    expect(find.text('Orientation'), findsOneWidget);
+    expect(find.text('Line Spacing'), findsOneWidget);
+    expect(find.text('Edge margin'), findsOneWidget);
+    final page = tester.getRect(find.byType(GroundPlanPage));
+    final controls = tester.getRect(find.text('Orientation'));
+    expect(controls.center.dx, lessThan(page.center.dx));
+    expect(controls.right, lessThan(page.center.dx));
+    expect(tester.takeException(), isNull);
+  });
 }
 
 List<LatLng> _addRectangle(

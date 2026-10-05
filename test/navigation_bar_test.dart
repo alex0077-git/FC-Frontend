@@ -2,6 +2,7 @@ import 'package:fc_frontend/core/router/app_router.dart';
 import 'package:fc_frontend/core/widgets/ground_plan_bar.dart';
 import 'package:fc_frontend/data/repositories/settings_repository.dart';
 import 'package:fc_frontend/features/ground_plan/ground_plan_page.dart';
+import 'package:fc_frontend/features/job_execution/job_execution_page.dart';
 import 'package:fc_frontend/main.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -148,6 +149,54 @@ void main() {
     }
   });
 
+  testWidgets('ground plan map RTL confirms then sends the flight command', (
+    tester,
+  ) async {
+    for (final size in [const Size(1200, 800), const Size(667, 375)]) {
+      await pumpRoute(tester, size, '/ground-plan');
+
+      expect(
+        find.descendant(of: find.byType(GroundPlanBar), matching: find.text('RTL')),
+        findsNothing,
+      );
+      final button = _rtlButton();
+      expect(button, findsOneWidget);
+      expect(find.descendant(of: button, matching: find.byIcon(Icons.flight_land)), findsOneWidget);
+      final page = tester.getRect(find.byType(GroundPlanPage));
+      final buttonRect = tester.getRect(button);
+      expect(page.contains(buttonRect.center), isTrue);
+      expect(buttonRect.center.dx, greaterThan(page.center.dx));
+      expect(buttonRect.bottom, greaterThan(page.center.dy));
+
+      await tester.tap(button);
+      await tester.pump();
+      expect(find.text('Command the drone to return to launch?'), findsOneWidget);
+      expect(find.byType(AlertDialog), findsNothing);
+      expect(find.text('Command sent (simulated)'), findsNothing);
+      await tester.tap(find.widgetWithText(TextButton, 'Cancel'));
+      await tester.pump();
+      expect(find.text('Command sent (simulated)'), findsNothing);
+      expect(find.text('Command the drone to return to launch?'), findsNothing);
+
+      await tester.tap(barText('Boundaries'));
+      await tester.pump();
+      expect(find.text('Reset'), findsOneWidget);
+      final openButton = tester.getRect(_rtlButton());
+      final sheet = tester.getRect(find.byKey(const Key('ground-plan-sheet')));
+      expect(openButton.bottom, lessThanOrEqualTo(sheet.top));
+
+      await tester.tap(_rtlButton());
+      await tester.pump();
+      await tester.tap(find.text('Confirm'));
+      await tester.pump();
+      expect(find.text('Command sent (simulated)'), findsOneWidget);
+      expect(find.text('Reset'), findsOneWidget);
+      ScaffoldMessenger.of(tester.element(find.byType(GroundPlanPage))).clearSnackBars();
+      await tester.pump();
+      expect(tester.takeException(), isNull);
+    }
+  });
+
   testWidgets('profile and settings stay in the top bar on other pages', (
     tester,
   ) async {
@@ -172,7 +221,9 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 400));
 
-    expect(find.text('Back to Ground Plan'), findsOneWidget);
+    expect(find.byType(JobExecutionPage), findsOneWidget);
+    expect(find.text('Back to Ground Plan'), findsNothing);
+    expect(find.text('Guidelines'), findsNothing);
     expect(find.text('Home'), findsOneWidget);
     expect(find.text('Takeoff'), findsNothing);
     expect(find.text('Boundaries'), findsNothing);
@@ -188,6 +239,12 @@ void _expectSheetWithinCap(WidgetTester tester) {
   final sheetHeight = tester.getSize(find.byKey(const Key('ground-plan-sheet'))).height;
   expect(sheetHeight, lessThanOrEqualTo(cap + 1));
   expect(sheetHeight, lessThan(pageHeight * 0.5));
+}
+
+Finder _rtlButton() {
+  return find.byWidgetPredicate(
+    (widget) => widget is IconButton && widget.tooltip == 'Return to launch',
+  );
 }
 
 Finder _topIcon(String tooltip) {

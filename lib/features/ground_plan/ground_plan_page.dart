@@ -3,6 +3,7 @@ import 'package:fc_frontend/core/geometry/local_meters.dart';
 import 'package:fc_frontend/core/map/map_view.dart';
 import 'package:fc_frontend/core/theme/app_theme.dart';
 import 'package:fc_frontend/core/widgets/coverage_adjust_controls.dart';
+import 'package:fc_frontend/core/widgets/map_rtl_button.dart';
 import 'package:fc_frontend/core/widgets/coverage_lines.dart';
 import 'package:fc_frontend/core/widgets/obstacle_map_layers.dart';
 import 'package:fc_frontend/data/models/boundary_point.dart';
@@ -161,6 +162,11 @@ class _GroundPlanPageState extends ConsumerState<GroundPlanPage> {
                         ),
                       ),
                     ),
+                  Positioned(
+                    right: 12,
+                    bottom: sheetMax + 12,
+                    child: const MapRtlButton(),
+                  ),
                   Positioned(
                     top: 12,
                     right: 12,
@@ -728,10 +734,6 @@ class _GroundPlanPageState extends ConsumerState<GroundPlanPage> {
       spacingMeters: minLineSpacingMeters,
       orientationDegrees: 0,
     );
-    if (!mounted) {
-      return;
-    }
-    context.go('/job-execution');
   }
 
   Future<void> _showServerError() {
