@@ -1,3 +1,6 @@
+import 'dart:async';
+
+import 'package:fc_frontend/core/geometry/area_math.dart';
 import 'package:fc_frontend/core/geometry/boundary_split.dart';
 import 'package:fc_frontend/core/geometry/local_meters.dart';
 import 'package:fc_frontend/core/geometry/polygon_simple.dart';
@@ -16,6 +19,7 @@ import 'package:fc_frontend/data/models/waypoint.dart';
 import 'package:fc_frontend/data/repositories/mission_repository.dart';
 import 'package:fc_frontend/data/repositories/telemetry_repository.dart';
 import 'package:fc_frontend/core/widgets/responsive.dart';
+import 'package:fc_frontend/features/ground_plan/area_readout.dart';
 import 'package:fc_frontend/features/ground_plan/boundary_point_dialog.dart';
 import 'package:fc_frontend/features/ground_plan/ground_plan_section.dart';
 import 'package:fc_frontend/features/ground_plan/boundary_point_marker.dart';
@@ -73,9 +77,22 @@ class _GroundPlanPageState extends ConsumerState<GroundPlanPage> {
   double _draftCircleRadius = Obstacle.defaultRadiusMeters;
   final List<_ObstacleDraft> _obstacleUndo = [];
   final List<_ObstacleDraft> _obstacleRedo = [];
+  Timer? _areaTimer;
+  int _areaVersion = 0;
+  bool _areaHasPublished = false;
+  String? _areaPreviewId;
+  LatLng? _areaPreviewPoint;
+  FieldArea _fieldArea = const FieldArea.invalid(FieldAreaProblem.needsThreePoints);
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _scheduleArea());
+  }
 
   @override
   void dispose() {
+    _areaTimer?.cancel();
     _altitudeController.dispose();
     _speedController.dispose();
     super.dispose();
@@ -101,6 +118,7 @@ class _GroundPlanPageState extends ConsumerState<GroundPlanPage> {
       ),
     );
     final mission = ref.read(missionRepositoryProvider);
+    final areaUnit = ref.watch(areaUnitProvider);
     final openSection = ref.watch(groundPlanSectionProvider).section;
     final selected = _waypointById(mission.waypoints, _selectedWaypointId);
     final hasCoverage = mission.coverageLines.isNotEmpty;
@@ -121,6 +139,10 @@ class _GroundPlanPageState extends ConsumerState<GroundPlanPage> {
       });
     });
     ref.listen(missionRepositoryProvider, (previous, next) {
+      if (previous?.boundaryPoints != next.boundaryPoints ||
+          previous?.obstacles != next.obstacles) {
+        _scheduleArea();
+      }
       final becameBlocked = next.coverageBlockedByObstacle &&
           previous?.coverageBlockedByObstacle != true;
       if (!becameBlocked) {
@@ -165,7 +187,7 @@ class _GroundPlanPageState extends ConsumerState<GroundPlanPage> {
               final controlsWidth = (constraints.maxWidth - 168).clamp(220.0, 360.0);
               return Stack(
                 children: [
-                  Positioned.fill(child: _planMap(mission, openSection)),
+                  Positioned.fill(child: _planMap(mission, openSection, areaUnit)),
                   if (openSection == GroundPlanSection.boundary)
                     Positioned(
                       left: 8,
@@ -313,7 +335,67 @@ class _GroundPlanPageState extends ConsumerState<GroundPlanPage> {
     );
   }
 
-  Widget _planMap(MissionState mission, GroundPlanSection? openSection) {
+  void _setAreaPreview(String? id, LatLng? point) {
+    _areaPreviewId = id;
+    _areaPreviewPoint = point;
+    _scheduleArea();
+  }
+
+  void _scheduleArea() {
+    _areaVersion++;
+    if (_areaTimer != null) {
+      return;
+    }
+    final delay = _areaHasPublished
+        ? const Duration(milliseconds: 50)
+        : Duration.zero;
+    _areaTimer = Timer(delay, () {
+      _areaTimer = null;
+      final version = _areaVersion;
+      final area = _measureArea();
+      if (!mounted || version != _areaVersion) {
+        if (mounted && _areaTimer == null && version != _areaVersion) {
+          _scheduleArea();
+        }
+        return;
+      }
+      _areaHasPublished = true;
+      setState(() => _fieldArea = area);
+    });
+  }
+
+  FieldArea _measureArea() {
+    final mission = ref.read(missionRepositoryProvider);
+    final ordered = [...mission.boundaryPoints]
+      ..sort((a, b) => a.order.compareTo(b.order));
+    return measureFieldArea(
+      boundary: [
+        for (final point in ordered)
+          if (point.id == _areaPreviewId && _areaPreviewPoint != null)
+            _areaPreviewPoint!
+          else
+            LatLng(point.latitude, point.longitude),
+      ],
+      obstacles: [
+        for (final obstacle in mission.obstacles)
+          if (obstacle.type == ObstacleType.circle &&
+              obstacle.center != null &&
+              obstacle.radiusMeters != null)
+            AreaSubject.circle(
+              center: obstacle.center!,
+              radiusMeters: obstacle.radiusMeters!,
+            )
+          else
+            AreaSubject.polygon(obstacle.vertices),
+      ],
+    );
+  }
+
+  Widget _planMap(
+    MissionState mission,
+    GroundPlanSection? openSection,
+    AreaUnit areaUnit,
+  ) {
     final savedSplit = mission.splits.isEmpty ? null : mission.splits.last;
     return _PlanMap(
       controller: _mapController,
@@ -336,6 +418,12 @@ class _GroundPlanPageState extends ConsumerState<GroundPlanPage> {
       onMapReady: _frameBoundary,
       onEditPoint: _editBoundaryPoint,
       onMovePoint: _moveBoundaryPoint,
+      onBoundaryPreview: _setAreaPreview,
+      onCycleAreaUnit: () {
+        ref.read(areaUnitProvider.notifier).cycle();
+      },
+      fieldArea: _fieldArea,
+      areaUnit: areaUnit,
     );
   }
 
@@ -1175,6 +1263,10 @@ class _PlanMap extends StatefulWidget {
     required this.onEditPoint,
     required this.onMovePoint,
     required this.onMarkSplit,
+    required this.onBoundaryPreview,
+    required this.onCycleAreaUnit,
+    required this.fieldArea,
+    required this.areaUnit,
   });
 
   final MapController controller;
@@ -1195,6 +1287,10 @@ class _PlanMap extends StatefulWidget {
   final ValueChanged<BoundaryPoint> onEditPoint;
   final bool Function(BoundaryPoint point, LatLng next) onMovePoint;
   final void Function(LatLng point, {required bool onBoundary}) onMarkSplit;
+  final void Function(String? id, LatLng? point) onBoundaryPreview;
+  final VoidCallback onCycleAreaUnit;
+  final FieldArea fieldArea;
+  final AreaUnit areaUnit;
 
   @override
   State<_PlanMap> createState() => _PlanMapState();
@@ -1263,6 +1359,7 @@ class _PlanMapState extends State<_PlanMap> {
                 if (widget.previewObstacle != null) widget.previewObstacle!,
               ],
               selectedId: widget.selectedObstacleId,
+              unit: widget.areaUnit,
             ),
             if (widget.polygonDraft.length == 2)
               PolylineLayer(
@@ -1305,16 +1402,20 @@ class _PlanMapState extends State<_PlanMap> {
                         }
                         widget.onEditPoint(point);
                       },
-                      onPreview: (next) => setState(() {
-                        _previewId = point.id;
-                        _preview = next;
-                      }),
+                      onPreview: (next) {
+                        setState(() {
+                          _previewId = point.id;
+                          _preview = next;
+                        });
+                        widget.onBoundaryPreview(point.id, next);
+                      },
                       onCommit: (next) {
                         final accepted = widget.onMovePoint(point, next);
                         setState(() {
                           _previewId = null;
                           _preview = null;
                         });
+                        widget.onBoundaryPreview(null, null);
                         return accepted;
                       },
                     ),
@@ -1342,6 +1443,19 @@ class _PlanMapState extends State<_PlanMap> {
                     width: 28,
                     height: 28,
                     child: const _IndexMarker(label: 'B'),
+                  ),
+                if (widget.mission.boundaryPoints.length >= 3)
+                  Marker(
+                    point: _areaChipPoint(),
+                    width: 180,
+                    height: 36,
+                    alignment: Alignment.center,
+                    child: AreaMapChip(
+                      key: const Key('field-area-chip'),
+                      area: widget.fieldArea,
+                      unit: widget.areaUnit,
+                      onCycleUnit: widget.onCycleAreaUnit,
+                    ),
                   ),
                 if (widget.splitFirst != null)
                   Marker(
@@ -1393,6 +1507,22 @@ class _PlanMapState extends State<_PlanMap> {
       point,
     );
     return side != null && side != mission.activeSplit;
+  }
+
+  LatLng _areaChipPoint() {
+    final label = widget.fieldArea.label;
+    if (label != null) {
+      return label;
+    }
+    final points = widget.mission.boundaryPoints;
+    var latitude = 0.0;
+    var longitude = 0.0;
+    for (final point in points) {
+      latitude += point.latitude;
+      longitude += point.longitude;
+    }
+    final count = points.length;
+    return LatLng(latitude / count, longitude / count);
   }
 
   List<LatLng> _displayPoints() {

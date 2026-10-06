@@ -1,7 +1,9 @@
-﻿import 'package:fc_frontend/core/map/map_view.dart';
+﻿import 'package:fc_frontend/core/geometry/area_math.dart';
+import 'package:fc_frontend/core/map/map_view.dart';
 import 'package:fc_frontend/core/theme/app_theme.dart';
 import 'package:fc_frontend/core/widgets/coverage_lines.dart';
 import 'package:fc_frontend/core/widgets/obstacle_map_layers.dart';
+import 'package:fc_frontend/features/ground_plan/area_readout.dart';
 import 'package:fc_frontend/features/ground_plan/waypoint_path.dart';
 import 'package:fc_frontend/data/models/coverage_line.dart';
 import 'package:fc_frontend/data/repositories/mission_repository.dart';
@@ -24,6 +26,7 @@ class _JobExecutionPageState extends ConsumerState<JobExecutionPage> {
   @override
   Widget build(BuildContext context) {
     final mission = ref.watch(missionRepositoryProvider);
+    final areaUnit = ref.watch(areaUnitProvider);
     final lines = mission.coverageLines;
     final activeLine = lines.isEmpty ? null : lines.first;
 
@@ -33,6 +36,7 @@ class _JobExecutionPageState extends ConsumerState<JobExecutionPage> {
         mission: mission,
         activeIndex: 0,
         drone: _lineMidpoint(activeLine),
+        areaUnit: areaUnit,
       ),
     );
   }
@@ -56,12 +60,14 @@ class _JobMap extends StatelessWidget {
     required this.mission,
     required this.activeIndex,
     required this.drone,
+    required this.areaUnit,
   });
 
   final MapController controller;
   final MissionState mission;
   final int activeIndex;
   final LatLng? drone;
+  final AreaUnit areaUnit;
 
   @override
   Widget build(BuildContext context) {
@@ -102,7 +108,7 @@ class _JobMap extends StatelessWidget {
             ),
             simplificationTolerance: 0,
           ),
-        ...obstacleMapLayers(obstacles: mission.obstacles),
+        ...obstacleMapLayers(obstacles: mission.obstacles, unit: areaUnit),
         ...waypointPathMarkers(
           mission.waypoints,
           activeSplit: mission.activeSplit,
