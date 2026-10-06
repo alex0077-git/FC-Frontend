@@ -46,7 +46,7 @@ void main() {
 
     repo.redoBoundaryEdit();
     expect(repo.state.boundaryPoints.length, 3);
-    repo.addBoundaryPoint(latitude: 4, longitude: 40);
+    repo.addBoundaryPoint(latitude: 4, longitude: 10);
     expect(repo.state.redoHistory, isEmpty);
     expect(repo.state.boundaryPoints.last.latitude, 4);
   });

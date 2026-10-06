@@ -23,7 +23,7 @@ class BoundaryPointMarker extends StatefulWidget {
   final bool dimmed;
   final VoidCallback onTap;
   final ValueChanged<LatLng> onPreview;
-  final ValueChanged<LatLng> onCommit;
+  final bool Function(LatLng next) onCommit;
 
   @override
   State<BoundaryPointMarker> createState() => _BoundaryPointMarkerState();
@@ -135,9 +135,10 @@ class _BoundaryPointMarkerState extends State<BoundaryPointMarker> {
     final next = camera.screenOffsetToLatLng(
       camera.latLngToScreenOffset(start) + _shift,
     );
-    widget.onCommit(next);
-    final unchanged = start.latitude == next.latitude && start.longitude == next.longitude;
-    if (unchanged && mounted) {
+    final accepted = widget.onCommit(next);
+    final unchanged =
+        start.latitude == next.latitude && start.longitude == next.longitude;
+    if ((!accepted || unchanged) && mounted) {
       setState(() {
         _shift = Offset.zero;
         _dragging = false;

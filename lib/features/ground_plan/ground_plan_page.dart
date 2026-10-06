@@ -1,5 +1,6 @@
 import 'package:fc_frontend/core/geometry/boundary_split.dart';
 import 'package:fc_frontend/core/geometry/local_meters.dart';
+import 'package:fc_frontend/core/geometry/polygon_simple.dart';
 import 'package:fc_frontend/core/map/map_view.dart';
 import 'package:fc_frontend/core/theme/app_theme.dart';
 import 'package:fc_frontend/core/widgets/coverage_adjust_controls.dart';
@@ -656,9 +657,14 @@ class _GroundPlanPageState extends ConsumerState<GroundPlanPage> {
     if (_obstacleTool != ObstacleTool.polygon) {
       return;
     }
+    final next = [..._polygonDraft, point];
+    if (!polygonIsSimple(next, closed: false)) {
+      _showMessage(obstacleCrossesMessage);
+      return;
+    }
     setState(() {
       _rememberObstacleDraft();
-      _polygonDraft = [..._polygonDraft, point];
+      _polygonDraft = next;
       if (_polygonDraft.length >= 3) {
         _polygonMoveOrigin = Obstacle.centerOf(_polygonDraft);
       }
@@ -689,7 +695,14 @@ class _GroundPlanPageState extends ConsumerState<GroundPlanPage> {
       final id = repository.addCircleObstacle(_draftCircleCenter!);
       repository.updateObstacleRadius(id, _draftCircleRadius);
     } else if (_obstacleTool == ObstacleTool.polygon && _polygonDraft.length >= 3) {
-      repository.addPolygonObstacle(_polygonDraft);
+      if (!polygonIsSimple(_polygonDraft, closed: true)) {
+        _showMessage(closedShapeCrossesMessage);
+        return;
+      }
+      if (repository.addPolygonObstacle(_polygonDraft).isEmpty) {
+        _showMessage(closedShapeCrossesMessage);
+        return;
+      }
     } else {
       return;
     }
@@ -740,6 +753,10 @@ class _GroundPlanPageState extends ConsumerState<GroundPlanPage> {
     final repository = ref.read(missionRepositoryProvider.notifier);
     if (repository.isPointInsideAnyObstacle(point)) {
       _showMessage('Cannot place a waypoint inside a no-fly zone');
+      return;
+    }
+    if (_proposedBoundaryCrosses(point)) {
+      _showMessage(boundaryCrossesMessage);
       return;
     }
     repository.addBoundaryPoint(
@@ -836,13 +853,17 @@ class _GroundPlanPageState extends ConsumerState<GroundPlanPage> {
     ref.read(missionRepositoryProvider.notifier).redoBoundaryEdit();
   }
 
-  void _moveBoundaryPoint(BoundaryPoint point, LatLng next) {
+  bool _moveBoundaryPoint(BoundaryPoint point, LatLng next) {
     final repository = ref.read(missionRepositoryProvider.notifier);
     if (repository.isPointInsideAnyObstacle(next)) {
       _showMessage('Cannot place a waypoint inside a no-fly zone');
-      return;
+      return false;
     }
-    repository.updateBoundaryPoint(
+    if (_proposedBoundaryCrosses(next, replacingId: point.id)) {
+      _showMessage(boundaryCrossesMessage);
+      return false;
+    }
+    return repository.updateBoundaryPoint(
       id: point.id,
       latitude: next.latitude,
       longitude: next.longitude,
@@ -874,10 +895,13 @@ class _GroundPlanPageState extends ConsumerState<GroundPlanPage> {
     if (draft == null) {
       return;
     }
-    if (repository.isPointInsideAnyObstacle(
-      LatLng(draft.latitude, draft.longitude),
-    )) {
+    final edited = LatLng(draft.latitude, draft.longitude);
+    if (repository.isPointInsideAnyObstacle(edited)) {
       _showMessage('Cannot place a waypoint inside a no-fly zone');
+      return;
+    }
+    if (_proposedBoundaryCrosses(edited, replacingId: point.id)) {
+      _showMessage(boundaryCrossesMessage);
       return;
     }
     repository.updateBoundaryPoint(
@@ -900,6 +924,11 @@ class _GroundPlanPageState extends ConsumerState<GroundPlanPage> {
   }
 
   Future<void> _callForJob() async {
+    final ring = _boundaryRing(ref.read(missionRepositoryProvider));
+    if (!polygonIsSimple(ring, closed: true)) {
+      _showMessage(closedShapeCrossesMessage);
+      return;
+    }
     if (!ref.read(telemetryConnectionProvider)) {
       await _showServerError();
       return;
@@ -1030,6 +1059,20 @@ class _GroundPlanPageState extends ConsumerState<GroundPlanPage> {
     _showMessage('Mission uploaded (simulated)');
   }
 
+  bool _proposedBoundaryCrosses(LatLng point, {String? replacingId}) {
+    final ordered = [...ref.read(missionRepositoryProvider).boundaryPoints]
+      ..sort((a, b) => a.order.compareTo(b.order));
+    final ring = [
+      for (final existing in ordered)
+        if (existing.id == replacingId)
+          point
+        else
+          LatLng(existing.latitude, existing.longitude),
+      if (replacingId == null) point,
+    ];
+    return !polygonIsSimple(ring, closed: true);
+  }
+
   void _showMessage(String message) {
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
@@ -1150,7 +1193,7 @@ class _PlanMap extends StatefulWidget {
   final void Function(TapPosition tapPosition, LatLng point) onTap;
   final VoidCallback onMapReady;
   final ValueChanged<BoundaryPoint> onEditPoint;
-  final void Function(BoundaryPoint point, LatLng next) onMovePoint;
+  final bool Function(BoundaryPoint point, LatLng next) onMovePoint;
   final void Function(LatLng point, {required bool onBoundary}) onMarkSplit;
 
   @override
@@ -1267,11 +1310,12 @@ class _PlanMapState extends State<_PlanMap> {
                         _preview = next;
                       }),
                       onCommit: (next) {
-                        widget.onMovePoint(point, next);
+                        final accepted = widget.onMovePoint(point, next);
                         setState(() {
                           _previewId = null;
                           _preview = null;
                         });
+                        return accepted;
                       },
                     ),
                   ),

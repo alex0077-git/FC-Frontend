@@ -5,6 +5,7 @@ import 'package:fc_frontend/core/geometry/boundary_orientation.dart';
 import 'package:fc_frontend/core/geometry/boundary_split.dart';
 import 'package:fc_frontend/core/geometry/local_meters.dart';
 import 'package:fc_frontend/core/geometry/polygon_inset.dart';
+import 'package:fc_frontend/core/geometry/polygon_simple.dart';
 import 'package:fc_frontend/data/models/boundary_edit.dart';
 import 'package:fc_frontend/data/models/boundary_point.dart';
 import 'package:fc_frontend/data/models/coverage_line.dart';
@@ -160,8 +161,11 @@ class MissionRepository extends StateNotifier<MissionState> {
     if (isPointInsideAnyObstacle(LatLng(latitude, longitude))) {
       return false;
     }
-
     final before = List<BoundaryPoint>.of(state.boundaryPoints);
+    if (!_boundaryStaysSimple(before, latitude: latitude, longitude: longitude)) {
+      return false;
+    }
+
     final point = BoundaryPoint(
       id: _nextId('boundary'),
       latitude: latitude,
@@ -205,6 +209,14 @@ class MissionRepository extends StateNotifier<MissionState> {
       return true;
     }
     if (isPointInsideAnyObstacle(LatLng(latitude, longitude))) {
+      return false;
+    }
+    if (!_boundaryStaysSimple(
+      before,
+      latitude: latitude,
+      longitude: longitude,
+      replacingId: id,
+    )) {
       return false;
     }
 
@@ -308,7 +320,7 @@ class MissionRepository extends StateNotifier<MissionState> {
   }
 
   String addPolygonObstacle(List<LatLng> vertices) {
-    if (vertices.length < 3) {
+    if (vertices.length < 3 || !polygonIsSimple(vertices, closed: true)) {
       return '';
     }
     final corners = List<LatLng>.unmodifiable(vertices);
@@ -1173,6 +1185,25 @@ class MissionRepository extends StateNotifier<MissionState> {
       pieces = next;
     }
     return pieces;
+  }
+
+  static bool _boundaryStaysSimple(
+    List<BoundaryPoint> points, {
+    required double latitude,
+    required double longitude,
+    String? replacingId,
+  }) {
+    final placed = LatLng(latitude, longitude);
+    final ordered = [...points]..sort((a, b) => a.order.compareTo(b.order));
+    final ring = [
+      for (final point in ordered)
+        if (point.id == replacingId)
+          placed
+        else
+          LatLng(point.latitude, point.longitude),
+      if (replacingId == null) placed,
+    ];
+    return polygonIsSimple(ring, closed: true);
   }
 
   static List<LatLng> _ringOf(List<BoundaryPoint> points) {
