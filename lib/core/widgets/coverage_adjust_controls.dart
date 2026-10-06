@@ -24,10 +24,20 @@ class CoverageAdjustControls extends ConsumerWidget {
               label: '',
               degrees: mission.orientationDegrees,
               size: 96,
+              onDragStart: repository.beginOrientationDrag,
+              onDragEnd: repository.endOrientationDrag,
               onChanged: (degrees) {
                 repository.scheduleCoverage(orientationDegrees: degrees);
               },
             ),
+            if (mission.coverageCalculating) ...[
+              const SizedBox(width: 4),
+              const SizedBox(
+                width: 18,
+                height: 18,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+            ],
             const SizedBox(width: 4),
             Expanded(
               child: Column(

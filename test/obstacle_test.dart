@@ -8,6 +8,7 @@ import 'package:fc_frontend/data/repositories/settings_repository.dart';
 import 'package:fc_frontend/features/ground_plan/ground_plan_page.dart';
 import 'package:fc_frontend/features/ground_plan/ground_plan_section.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:latlong2/latlong.dart';
@@ -329,20 +330,18 @@ void main() {
     await tester.pump();
     expect(find.text('Circle'), findsNothing);
     expect(find.text('Polygon'), findsNothing);
-    expect(find.text('Radius'), findsOneWidget);
-    expect(find.text('Position'), findsOneWidget);
-    expect(find.text('Undo'), findsOneWidget);
-    expect(find.text('Redo'), findsOneWidget);
-    expect(find.text('Reset'), findsOneWidget);
-    expect(find.text('OK'), findsOneWidget);
+    expect(find.text('Radius'), findsNothing);
+    expect(find.text('Position'), findsNothing);
+    expect(find.text('Tap inside the field to place the circle.'), findsWidgets);
     expect(repository.state.obstacles, isEmpty);
 
-    await tester.ensureVisible(find.text('Reset'));
-    await tester.tap(find.text('Reset'));
+    final map = tester.widget<FlutterMap>(find.byType(FlutterMap));
+    map.mapController!.move(const LatLng(12.90, 77.50), 16);
     await tester.pump();
-    expect(find.text('Circle'), findsNothing);
-    expect(find.text('Polygon'), findsNothing);
-    expect(find.text('Radius'), findsOneWidget);
+    await tester.tapAt(tester.getCenter(find.byType(FlutterMap)));
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.text('Tap inside the field boundary'), findsOneWidget);
+    expect(find.text('Radius'), findsNothing);
     expect(repository.state.obstacles, isEmpty);
 
     final section = ProviderScope.containerOf(
@@ -379,7 +378,14 @@ void main() {
     await tester.tap(find.text('Circle'));
     await tester.pump();
     expect(find.text('Circle'), findsNothing);
+    expect(find.text('Radius'), findsNothing);
+    const tapped = LatLng(12.9716, 77.5946);
+    map.mapController!.move(tapped, 16);
+    await tester.pump();
+    await tester.tapAt(tester.getCenter(find.byType(FlutterMap)));
+    await tester.pump(const Duration(milliseconds: 300));
     expect(find.text('Radius'), findsOneWidget);
+    expect(find.text('Position'), findsOneWidget);
     final increaseRadius = find.byWidgetPredicate(
       (widget) => widget is IconButton && widget.tooltip == 'Increase radius',
     );
@@ -415,12 +421,7 @@ void main() {
     final saved = repository.state.obstacles.single;
     expect(saved.type, ObstacleType.circle);
     expect(saved.radiusMeters, 11);
-    final anchor = Obstacle.centerOf([
-      const LatLng(12.970, 77.590),
-      const LatLng(12.970, 77.595),
-      const LatLng(12.974, 77.595),
-    ]);
-    final shift = _xy(saved.center!, anchor);
+    final shift = _xy(saved.center!, tapped);
     expect(shift.$1, closeTo(0.5, 0.05));
     expect(shift.$2, closeTo(0, 0.05));
 
@@ -431,7 +432,8 @@ void main() {
     await tester.tap(find.text('Circle'));
     await tester.pump();
     expect(find.text('Circle'), findsNothing);
-    expect(find.text('Radius'), findsOneWidget);
+    expect(find.text('Radius'), findsNothing);
+    expect(find.text('Tap inside the field to place the circle.'), findsWidgets);
     ProviderScope.containerOf(
       tester.element(find.byType(GroundPlanPage)),
     ).read(groundPlanSectionProvider.notifier).close();

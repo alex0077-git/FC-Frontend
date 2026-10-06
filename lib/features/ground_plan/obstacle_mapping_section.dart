@@ -15,6 +15,7 @@ class ObstacleMappingSection extends StatelessWidget {
   const ObstacleMappingSection({
     super.key,
     required this.tool,
+    required this.circlePlaced,
     required this.polygonPoints,
     required this.radiusMeters,
     required this.canUndo,
@@ -32,6 +33,9 @@ class ObstacleMappingSection extends StatelessWidget {
   });
 
   final ObstacleTool? tool;
+
+  /// True after the user has tapped a center for the circle.
+  final bool circlePlaced;
   final int polygonPoints;
   final double radiusMeters;
   final bool canUndo;
@@ -48,12 +52,18 @@ class ObstacleMappingSection extends StatelessWidget {
   final VoidCallback onOk;
 
   bool get _canConfirm =>
-      tool == ObstacleTool.circle || polygonPoints >= 3;
+      (tool == ObstacleTool.circle && circlePlaced) || polygonPoints >= 3;
 
   @override
   Widget build(BuildContext context) {
     if (tool == null) {
       return _ObstacleChooser(onCircle: onCircle, onPolygon: onPolygon);
+    }
+    if (tool == ObstacleTool.circle && !circlePlaced) {
+      return const Padding(
+        padding: EdgeInsets.symmetric(vertical: 4),
+        child: Text('Tap inside the field to place the circle.'),
+      );
     }
     return _ObstacleDraftControls(
       tool: tool!,

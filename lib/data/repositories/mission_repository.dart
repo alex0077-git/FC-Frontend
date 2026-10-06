@@ -38,6 +38,7 @@ class MissionState {
     this.boundaryEditingLocked = false,
     this.activeSplit = -1,
     this.coverageBlockedByObstacle = false,
+    this.coverageCalculating = false,
   });
 
   final List<BoundaryPoint> boundaryPoints;
@@ -70,6 +71,9 @@ class MissionState {
   /// cut does not set this.
   final bool coverageBlockedByObstacle;
 
+  /// True while a dragged orientation is being turned into spray lines.
+  final bool coverageCalculating;
+
   MissionState copyWith({
     List<BoundaryPoint>? boundaryPoints,
     List<CoverageLine>? coverageLines,
@@ -86,6 +90,7 @@ class MissionState {
     bool? boundaryEditingLocked,
     int? activeSplit,
     bool? coverageBlockedByObstacle,
+    bool? coverageCalculating,
   }) {
     return MissionState(
       boundaryPoints: boundaryPoints ?? this.boundaryPoints,
@@ -105,6 +110,7 @@ class MissionState {
       activeSplit: activeSplit ?? this.activeSplit,
       coverageBlockedByObstacle:
           coverageBlockedByObstacle ?? this.coverageBlockedByObstacle,
+      coverageCalculating: coverageCalculating ?? this.coverageCalculating,
     );
   }
 }
@@ -120,6 +126,22 @@ class MissionRepository extends StateNotifier<MissionState> {
   double? _pendingOrientation;
   double? _pendingMargin;
   bool _closed = false;
+  bool _orientationPublishRunning = false;
+  bool _orientationRepublish = false;
+
+  /// How long the stick can keep moving before the spray lines are rebuilt.
+  /// Rebuilding on every pixel blocks the knob, because the route math runs
+  /// on the same thread that draws the stick.
+  static const _orientationDragGap = Duration(milliseconds: 180);
+
+  static const _coverageCooldown = Duration(milliseconds: 50);
+
+  /// While the orientation stick is held, the number of passes and which end
+  /// they connect on stay as they were at the start of the drag. Rebuilding
+  /// that choice on every angle made the lines jump.
+  bool _holdCoverageShape = false;
+  List<int?>? _heldPassCounts;
+  List<int?>? _heldOrderIndexes;
 
   @override
   void dispose() {
@@ -558,6 +580,9 @@ class MissionRepository extends StateNotifier<MissionState> {
     _pendingSpacing = null;
     _pendingOrientation = null;
     _pendingMargin = null;
+    _holdCoverageShape = false;
+    _heldPassCounts = null;
+    _heldOrderIndexes = null;
     _publishNow(
       spacingMeters,
       orientationDegrees,
@@ -568,10 +593,10 @@ class MissionRepository extends StateNotifier<MissionState> {
     }
   }
 
-  /// Applies the latest spacing and line angle. The joystick draws its own
-  /// knob while this runs, so a drag does not rebuild the map on every degree.
-  /// The coverage lines follow on the next frame, then at most every 50
-  /// milliseconds until the finger stops.
+  /// Applies the latest spacing and line angle. While the orientation stick
+  /// is held, the knob has already moved on its own. The spray lines follow
+  /// the latest angle about every 180 milliseconds, so the route math does
+  /// not freeze the stick.
   /// Stores the edge gap and rebuilds the spray lines with the same spacing
   /// and angle.
   void setCoverageMargin(double marginMeters) {
@@ -581,6 +606,31 @@ class MissionRepository extends StateNotifier<MissionState> {
       return;
     }
     scheduleCoverage(marginMeters: margin);
+  }
+
+  /// Keeps the current pass layout while the orientation stick is moving.
+  void beginOrientationDrag() {
+    _holdCoverageShape = true;
+    _heldPassCounts = null;
+    _heldOrderIndexes = null;
+  }
+
+  /// Lets the next rebuild choose the pass layout again, now that the finger
+  /// has lifted. The final angle is applied after the knob has been drawn.
+  void endOrientationDrag() {
+    final wasHolding = _holdCoverageShape || _heldPassCounts != null;
+    _holdCoverageShape = false;
+    _heldPassCounts = null;
+    _heldOrderIndexes = null;
+    _coverageTimer?.cancel();
+    _coverageTimer = null;
+    _coverageQueued = false;
+    if (!wasHolding && _pendingOrientation == null) {
+      return;
+    }
+    _pendingSpacing ??= state.spacingMeters;
+    _pendingOrientation ??= state.orientationDegrees;
+    _publishHeldOrientation();
   }
 
   /// Turns the spray lines so they run along the longest side of the field.
@@ -613,6 +663,10 @@ class MissionRepository extends StateNotifier<MissionState> {
     }
     _pendingSpacing ??= state.spacingMeters;
     _pendingOrientation ??= state.orientationDegrees;
+    if (_holdCoverageShape) {
+      _armOrientationDebounce();
+      return;
+    }
     if (_coverageTimer != null || _coverageQueued) {
       return;
     }
@@ -629,8 +683,87 @@ class MissionRepository extends StateNotifier<MissionState> {
     });
   }
 
+  void _armOrientationDebounce() {
+    if (_orientationPublishRunning) {
+      _orientationRepublish = true;
+      return;
+    }
+    // Keep the timer that is already running. Restarting it on every pixel
+    // meant a continuous drag never rebuilt the spray lines.
+    if (_coverageTimer != null) {
+      return;
+    }
+    _coverageTimer = Timer(_orientationDragGap, () {
+      _coverageTimer = null;
+      if (_closed) {
+        return;
+      }
+      _publishHeldOrientation();
+    });
+  }
+
+  /// Paints the knob first, then rebuilds the spray lines. With obstacles in
+  /// the field, a calculating flag is shown for one frame before the clip runs
+  /// so the screen can update instead of looking frozen.
+  void _publishHeldOrientation() {
+    if (_orientationPublishRunning) {
+      _orientationRepublish = true;
+      return;
+    }
+    _orientationPublishRunning = true;
+    _orientationRepublish = false;
+    unawaited(_publishHeldOrientationBody());
+  }
+
+  Future<void> _publishHeldOrientationBody() async {
+    try {
+      await Future<void>.delayed(Duration.zero);
+      if (_closed) {
+        return;
+      }
+      final heavy = state.obstacles.isNotEmpty;
+      if (heavy && !state.coverageCalculating) {
+        state = state.copyWith(coverageCalculating: true);
+        await Future<void>.delayed(Duration.zero);
+      }
+      if (_closed) {
+        return;
+      }
+      final spacing = _pendingSpacing ?? state.spacingMeters;
+      final orientation = _pendingOrientation ?? state.orientationDegrees;
+      final margin = _pendingMargin;
+      _pendingSpacing = null;
+      _pendingOrientation = null;
+      _pendingMargin = null;
+      _publishNow(spacing, orientation, marginMeters: margin);
+      if (_holdCoverageShape &&
+          (_pendingSpacing != null ||
+              _pendingOrientation != null ||
+              _pendingMargin != null)) {
+        _orientationRepublish = true;
+      }
+    } finally {
+      _orientationPublishRunning = false;
+      if (!_closed && state.coverageCalculating) {
+        state = state.copyWith(coverageCalculating: false);
+      }
+    }
+    if (_closed) {
+      return;
+    }
+    if (!_orientationRepublish && _pendingOrientation == null) {
+      return;
+    }
+    _orientationRepublish = false;
+    if (_holdCoverageShape) {
+      _armOrientationDebounce();
+    } else if (_pendingOrientation != null) {
+      _publishHeldOrientation();
+    }
+  }
+
   void _armCoverageCooldown() {
-    _coverageTimer = Timer(const Duration(milliseconds: 50), () {
+    _coverageTimer = Timer(_coverageCooldown, () {
       _coverageTimer = null;
       if (_closed || _pendingSpacing == null || _pendingOrientation == null) {
         return;
@@ -690,6 +823,8 @@ class MissionRepository extends StateNotifier<MissionState> {
     final pathSections = <int>[];
     final pathPumps = <List<bool>>[];
     final planningSections = <List<LatLng>>[];
+    final passCounts = List<int?>.filled(sections.length, null);
+    final orderIndexes = List<int?>.filled(sections.length, null);
     var blockedByObstacle = false;
     for (var sectionIndex = 0; sectionIndex < sections.length; sectionIndex++) {
       final section = sections[sectionIndex];
@@ -708,8 +843,18 @@ class MissionRepository extends StateNotifier<MissionState> {
           altitude: sample.altitude,
           speed: sample.speed,
           actionIndex: sample.actionIndex,
+          lockedPassCount: _heldPassCounts != null &&
+                  sectionIndex < _heldPassCounts!.length
+              ? _heldPassCounts![sectionIndex]
+              : null,
+          lockedOrderIndex: _heldOrderIndexes != null &&
+                  sectionIndex < _heldOrderIndexes!.length
+              ? _heldOrderIndexes![sectionIndex]
+              : null,
         ),
       );
+      passCounts[sectionIndex] = geometry.passCount;
+      orderIndexes[sectionIndex] = geometry.orderIndex;
       var breakNext = false;
       LatLng? previousEnd;
       for (final line in geometry.lines) {
@@ -782,6 +927,10 @@ class MissionRepository extends StateNotifier<MissionState> {
           previousEnd = piece.$2;
         }
       }
+    }
+    if (_holdCoverageShape && _heldPassCounts == null) {
+      _heldPassCounts = passCounts;
+      _heldOrderIndexes = orderIndexes;
     }
     _keepRoutesInside(
       sections: sections,
@@ -1272,6 +1421,8 @@ class _CoverageRequest {
     required this.altitude,
     required this.speed,
     required this.actionIndex,
+    this.lockedPassCount,
+    this.lockedOrderIndex,
   });
 
   final List<double> latitudes;
@@ -1282,6 +1433,8 @@ class _CoverageRequest {
   final double altitude;
   final double speed;
   final int actionIndex;
+  final int? lockedPassCount;
+  final int? lockedOrderIndex;
 }
 
 class _CoverageGeometry {
@@ -1294,6 +1447,8 @@ class _CoverageGeometry {
     this.waypointSections = const [],
     this.waypointPumpOn = const [],
     this.routeBreaks = const [],
+    this.passCount = 0,
+    this.orderIndex = 0,
   });
 
   /// Each line is `[startLat, startLng, endLat, endLng]`.
@@ -1305,6 +1460,8 @@ class _CoverageGeometry {
   final List<double> waypointLongitudes;
   final List<int> waypointSections;
   final List<bool> waypointPumpOn;
+  final int passCount;
+  final int orderIndex;
 }
 
 class _LocalPoint {
@@ -1362,12 +1519,18 @@ _CoverageGeometry _coverageGeometry(_CoverageRequest request) {
   }
 
   final minY = localPolygon.map((point) => point.y).reduce(min);
-  final lineCount = min(
+  final naturalCount = min(
     maxCoverageLines,
     max(2, (sweepExtent / request.spacingMeters).ceil() + 1),
   );
+  final lockedCount = request.lockedPassCount;
+  final lineCount = lockedCount == null
+      ? naturalCount
+      : lockedCount.clamp(2, maxCoverageLines).toInt();
   // Spread the requested gap so the first and last lines sit on the
   // boundary edges. The gap never exceeds the spacing the user set.
+  // During a drag the count stays fixed, so this step changes smoothly
+  // instead of jumping when one more pass would fit.
   final step = sweepExtent / (lineCount - 1);
   final ys = <double>[
     for (var index = 0; index < lineCount; index++) minY + index * step,
@@ -1406,11 +1569,16 @@ _CoverageGeometry _coverageGeometry(_CoverageRequest request) {
     }
   }
 
-  final lines = _shortestSweepLines(sweeps);
+  final ordered = _shortestSweepLines(
+    sweeps,
+    lockedOrderIndex: request.lockedOrderIndex,
+  );
   return _CoverageGeometry(
-    lines: lines,
+    lines: ordered.lines,
     waypointLatitudes: const [],
     waypointLongitudes: const [],
+    passCount: lineCount,
+    orderIndex: ordered.orderIndex,
   );
 }
 
@@ -1444,12 +1612,22 @@ LatLng _sweepPoint({
   );
 }
 
-/// Four lawnmower orders of the same passes: low edge or high edge first,
-/// and the first pass left-to-right or right-to-left. The reverses share a
-/// length, so the shorter connector side wins. A tie keeps the earlier order.
-List<List<double>> _shortestSweepLines(List<_Sweep> sweeps) {
+class _OrderedSweeps {
+  const _OrderedSweeps(this.lines, this.orderIndex);
+
+  final List<List<double>> lines;
+  final int orderIndex;
+}
+
+/// Four lawnmower orders of the same passes. The shorter connector side wins,
+/// unless a drag has already chosen an order. Switching orders mid-drag swaps
+/// the connecting ends from one side of the field to the other.
+_OrderedSweeps _shortestSweepLines(
+  List<_Sweep> sweeps, {
+  int? lockedOrderIndex,
+}) {
   if (sweeps.isEmpty) {
-    return const [];
+    return const _OrderedSweeps([], 0);
   }
   final lowToHigh = [...sweeps]..sort((a, b) => a.y.compareTo(b.y));
   final candidates = [
@@ -1458,16 +1636,20 @@ List<List<double>> _shortestSweepLines(List<_Sweep> sweeps) {
     _orderSweeps(lowToHigh, startAtHighY: true, firstGoesRight: true),
     _orderSweeps(lowToHigh, startAtHighY: true, firstGoesRight: false),
   ];
-  var best = candidates.first;
-  var bestLength = _routeLength(best);
-  for (final candidate in candidates.skip(1)) {
-    final length = _routeLength(candidate);
+  final locked = lockedOrderIndex;
+  if (locked != null && locked >= 0 && locked < candidates.length) {
+    return _OrderedSweeps(candidates[locked], locked);
+  }
+  var bestIndex = 0;
+  var bestLength = _routeLength(candidates.first);
+  for (var index = 1; index < candidates.length; index++) {
+    final length = _routeLength(candidates[index]);
     if (length + 0.05 < bestLength) {
-      best = candidate;
+      bestIndex = index;
       bestLength = length;
     }
   }
-  return best;
+  return _OrderedSweeps(candidates[bestIndex], bestIndex);
 }
 
 List<List<double>> _orderSweeps(

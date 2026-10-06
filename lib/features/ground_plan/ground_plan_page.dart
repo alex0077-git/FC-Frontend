@@ -82,7 +82,24 @@ class _GroundPlanPageState extends ConsumerState<GroundPlanPage> {
 
   @override
   Widget build(BuildContext context) {
-    final mission = ref.watch(missionRepositoryProvider);
+    // Coverage lines and the stick angle are watched by the map layer and the
+    // stick. Watching them here would rebuild the bars and sheets on every
+    // throttled route update.
+    ref.watch(
+      missionRepositoryProvider.select(
+        (mission) => (
+          mission.boundaryEditingLocked,
+          mission.boundaryPoints,
+          mission.undoHistory.length,
+          mission.redoHistory.length,
+          mission.coverageLines.isEmpty,
+          mission.splits,
+          mission.activeSplit,
+          mission.obstacles,
+        ),
+      ),
+    );
+    final mission = ref.read(missionRepositoryProvider);
     final openSection = ref.watch(groundPlanSectionProvider).section;
     final selected = _waypointById(mission.waypoints, _selectedWaypointId);
     final hasCoverage = mission.coverageLines.isNotEmpty;
@@ -379,6 +396,7 @@ class _GroundPlanPageState extends ConsumerState<GroundPlanPage> {
         ),
       GroundPlanSection.obstacles => ObstacleMappingSection(
           tool: _obstacleTool,
+          circlePlaced: _draftCircleCenter != null,
           polygonPoints: _polygonDraft.length,
           radiusMeters: _draftCircleRadius,
           canUndo: _obstacleUndo.isNotEmpty,
@@ -394,28 +412,34 @@ class _GroundPlanPageState extends ConsumerState<GroundPlanPage> {
           onReset: _resetObstacleDraft,
           onOk: _confirmObstacle,
         ),
-      GroundPlanSection.waypoints => Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            _WaypointList(
-              waypoints: mission.waypoints,
-              selectedId: selected?.id,
-              canEdit: !mission.boundaryEditingLocked,
-              activeSplit: mission.activeSplit,
-              onSelect: _selectWaypoint,
-              onDelete: _deleteWaypoint,
-            ),
-            const SizedBox(height: 8),
-            _WaypointDetail(
-              waypoint: selected,
-              canEdit: !mission.boundaryEditingLocked,
-              altitudeController: _altitudeController,
-              speedController: _speedController,
-              onAltitudeChanged: (altitude) => _updateSelected(altitude: altitude),
-              onSpeedChanged: (speed) => _updateSelected(speed: speed),
-              onActionChanged: (action) => _updateSelected(action: action),
-            ),
-          ],
+      GroundPlanSection.waypoints => Consumer(
+          builder: (context, ref, _) {
+            final live = ref.watch(missionRepositoryProvider);
+            final liveSelected = _waypointById(live.waypoints, _selectedWaypointId);
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                _WaypointList(
+                  waypoints: live.waypoints,
+                  selectedId: liveSelected?.id,
+                  canEdit: !live.boundaryEditingLocked,
+                  activeSplit: live.activeSplit,
+                  onSelect: _selectWaypoint,
+                  onDelete: _deleteWaypoint,
+                ),
+                const SizedBox(height: 8),
+                _WaypointDetail(
+                  waypoint: liveSelected,
+                  canEdit: !live.boundaryEditingLocked,
+                  altitudeController: _altitudeController,
+                  speedController: _speedController,
+                  onAltitudeChanged: (altitude) => _updateSelected(altitude: altitude),
+                  onSpeedChanged: (speed) => _updateSelected(speed: speed),
+                  onActionChanged: (action) => _updateSelected(action: action),
+                ),
+              ],
+            );
+          },
         ),
       GroundPlanSection.history => Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -501,17 +525,10 @@ class _GroundPlanPageState extends ConsumerState<GroundPlanPage> {
       _polygonMoveOrigin = null;
       _obstacleUndo.clear();
       _obstacleRedo.clear();
-      if (tool == ObstacleTool.circle) {
-        final anchor = _draftAnchor();
-        _draftCircleCenter = anchor;
-        _draftCircleOrigin = anchor;
-        _draftCircleBaseline = anchor;
-        _draftCircleRadius = Obstacle.defaultRadiusMeters;
-      } else {
-        _draftCircleCenter = null;
-        _draftCircleOrigin = null;
-        _draftCircleBaseline = null;
-      }
+      _draftCircleCenter = null;
+      _draftCircleOrigin = null;
+      _draftCircleBaseline = null;
+      _draftCircleRadius = Obstacle.defaultRadiusMeters;
       _obstacleTool = tool;
     });
   }
@@ -594,16 +611,6 @@ class _GroundPlanPageState extends ConsumerState<GroundPlanPage> {
     });
   }
 
-  LatLng _draftAnchor() {
-    final points = ref.read(missionRepositoryProvider).boundaryPoints;
-    if (points.length >= 3) {
-      return Obstacle.centerOf([
-        for (final point in points) LatLng(point.latitude, point.longitude),
-      ]);
-    }
-    return defaultMapCenter;
-  }
-
   Obstacle? _previewObstacle(GroundPlanSection? section) {
     if (section != GroundPlanSection.obstacles) {
       return null;
@@ -642,6 +649,10 @@ class _GroundPlanPageState extends ConsumerState<GroundPlanPage> {
   }
 
   void _onObstacleTap(LatLng point) {
+    if (_obstacleTool == ObstacleTool.circle) {
+      _placeCircle(point);
+      return;
+    }
     if (_obstacleTool != ObstacleTool.polygon) {
       return;
     }
@@ -651,6 +662,24 @@ class _GroundPlanPageState extends ConsumerState<GroundPlanPage> {
       if (_polygonDraft.length >= 3) {
         _polygonMoveOrigin = Obstacle.centerOf(_polygonDraft);
       }
+    });
+  }
+
+  void _placeCircle(LatLng point) {
+    if (_draftCircleCenter != null) {
+      return;
+    }
+    final mission = ref.read(missionRepositoryProvider);
+    if (!boundaryContains(_boundaryRing(mission), point)) {
+      _showMessage('Tap inside the field boundary');
+      return;
+    }
+    setState(() {
+      _rememberObstacleDraft();
+      _draftCircleCenter = point;
+      _draftCircleOrigin = point;
+      _draftCircleBaseline = point;
+      _draftCircleRadius = Obstacle.defaultRadiusMeters;
     });
   }
 
@@ -1025,6 +1054,64 @@ Waypoint? _waypointById(List<Waypoint> waypoints, String? id) {
   return null;
 }
 
+/// Spray lines and, when there is no route yet, the plain waypoint path.
+/// Watches only those fields, so a route update does not rebuild the rest
+/// of the Ground Plan page.
+class _LiveCoverageLayer extends ConsumerWidget {
+  const _LiveCoverageLayer();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final lines = ref.watch(
+      missionRepositoryProvider.select((mission) => mission.coverageLines),
+    );
+    final paths = ref.watch(
+      missionRepositoryProvider.select((mission) => mission.coveragePaths),
+    );
+    final waypoints = ref.watch(
+      missionRepositoryProvider.select((mission) => mission.waypoints),
+    );
+    final activeSplit = ref.watch(
+      missionRepositoryProvider.select((mission) => mission.activeSplit),
+    );
+    final calculating = ref.watch(
+      missionRepositoryProvider.select((mission) => mission.coverageCalculating),
+    );
+    if (lines.isEmpty) {
+      return Stack(children: waypointPathLine(waypoints));
+    }
+    final layer = PolylineLayer(
+      polylines: coveragePolylines(
+        lines,
+        paths: paths,
+        activeSplit: activeSplit,
+      ),
+      simplificationTolerance: 0,
+    );
+    if (!calculating) {
+      return layer;
+    }
+    return Opacity(opacity: 0.4, child: layer);
+  }
+}
+
+class _LiveWaypointMarkers extends ConsumerWidget {
+  const _LiveWaypointMarkers();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final waypoints = ref.watch(
+      missionRepositoryProvider.select((mission) => mission.waypoints),
+    );
+    final activeSplit = ref.watch(
+      missionRepositoryProvider.select((mission) => mission.activeSplit),
+    );
+    return Stack(
+      children: waypointPathMarkers(waypoints, activeSplit: activeSplit),
+    );
+  }
+}
+
 class _PlanMap extends StatefulWidget {
   const _PlanMap({
     required this.controller,
@@ -1078,7 +1165,9 @@ class _PlanMapState extends State<_PlanMap> {
   Widget build(BuildContext context) {
     final hint = widget.obstacleMapping
         ? switch (widget.obstacleTool) {
-            ObstacleTool.circle => 'Adjust the circle, then press OK',
+            ObstacleTool.circle => widget.previewObstacle == null
+                ? 'Tap inside the field to place the circle.'
+                : 'Adjust the circle, then press OK',
             ObstacleTool.polygon => widget.polygonDraft.length < 3
                 ? 'Tap the map to place each corner, in order'
                 : 'Press OK to keep this no-fly zone',
@@ -1124,17 +1213,7 @@ class _PlanMapState extends State<_PlanMap> {
                   Polyline(points: points, color: AppTheme.primary, strokeWidth: 2),
                 ],
               ),
-            if (widget.mission.coverageLines.isNotEmpty)
-              PolylineLayer(
-                polylines: coveragePolylines(
-                  widget.mission.coverageLines,
-                  paths: widget.mission.coveragePaths,
-                  activeSplit: widget.mission.activeSplit,
-                ),
-                simplificationTolerance: 0,
-              ),
-            if (widget.mission.coverageLines.isEmpty)
-              ...waypointPathLine(widget.mission.waypoints),
+            const _LiveCoverageLayer(),
             ...obstacleMapLayers(
               obstacles: [
                 ...widget.mission.obstacles,
@@ -1236,10 +1315,7 @@ class _PlanMapState extends State<_PlanMap> {
                   ),
               ],
             ),
-            ...waypointPathMarkers(
-              widget.mission.waypoints,
-              activeSplit: widget.mission.activeSplit,
-            ),
+            const _LiveWaypointMarkers(),
           ],
           ),
         ),
