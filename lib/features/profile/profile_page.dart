@@ -31,7 +31,12 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
 
     final phone = Responsive.isPhone(context);
     return ListView(
-      padding: EdgeInsets.fromLTRB(phone ? 16 : 24, phone ? 16 : 32, phone ? 16 : 24, 24),
+      padding: EdgeInsets.fromLTRB(
+        phone ? 16 : 24,
+        phone ? 16 : 32,
+        phone ? 16 : 24,
+        24,
+      ),
       children: [
         Center(
           child: CircleAvatar(
@@ -105,6 +110,10 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
             DropdownMenuItem(
               value: MapViewMode.satellite,
               child: Text('Satellite'),
+            ),
+            DropdownMenuItem(
+              value: MapViewMode.digitalSky,
+              child: Text('Digital Sky'),
             ),
           ],
           onChanged: (value) {

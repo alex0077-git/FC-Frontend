@@ -27,6 +27,16 @@ void main() {
     );
   }
 
+  IconData styleIcon(WidgetTester tester) {
+    final icon = tester.widget<Icon>(
+      find.descendant(
+        of: styleButton('Map style'),
+        matching: find.byType(Icon),
+      ),
+    );
+    return icon.icon!;
+  }
+
   testWidgets('map style toggle is shared by every map page', (tester) async {
     tester.view.devicePixelRatio = 1.0;
     tester.view.physicalSize = const Size(1200, 800);
@@ -49,26 +59,35 @@ void main() {
     );
     await tester.pump();
 
-    expect(styleButton('Satellite map'), findsOneWidget);
+    expect(styleButton('Map style'), findsOneWidget);
+    expect(styleIcon(tester), Icons.map);
     expect(tileUrl(tester), MapTileLayer.streetUrl);
 
-    await tester.tap(styleButton('Satellite map'));
-    await tester.pump();
+    await tester.tap(styleButton('Map style'));
+    await tester.pumpAndSettle();
+    expect(find.text('Digital Sky'), findsOneWidget);
+    expect(find.byIcon(Icons.flight), findsOneWidget);
 
-    expect(styleButton('Street map'), findsOneWidget);
+    await tester.tap(find.text('Satellite').last);
+    await tester.pumpAndSettle();
+
+    expect(styleButton('Map style'), findsOneWidget);
+    expect(styleIcon(tester), Icons.satellite_alt);
     expect(tileUrl(tester), MapTileLayer.satelliteUrl);
 
     page.value = const MapFlightPage();
     await tester.pump();
 
-    expect(styleButton('Street map'), findsOneWidget);
+    expect(styleButton('Map style'), findsOneWidget);
+    expect(styleIcon(tester), Icons.satellite_alt);
     expect(tileUrl(tester), MapTileLayer.satelliteUrl);
     expect(find.text('Tiles © Esri'), findsOneWidget);
 
     page.value = const JobExecutionPage();
     await tester.pump();
 
-    expect(styleButton('Street map'), findsOneWidget);
+    expect(styleButton('Map style'), findsOneWidget);
+    expect(styleIcon(tester), Icons.satellite_alt);
     expect(tileUrl(tester), MapTileLayer.satelliteUrl);
 
     page.value = const ProfilePage();
@@ -81,13 +100,15 @@ void main() {
 
     await tester.tap(find.text('Satellite'));
     await tester.pumpAndSettle();
+    expect(find.text('Digital Sky'), findsOneWidget);
     await tester.tap(find.text('Street').last);
     await tester.pumpAndSettle();
 
     page.value = const GroundPlanPage();
     await tester.pump();
 
-    expect(styleButton('Satellite map'), findsOneWidget);
+    expect(styleButton('Map style'), findsOneWidget);
+    expect(styleIcon(tester), Icons.map);
     expect(tileUrl(tester), MapTileLayer.streetUrl);
   });
 }

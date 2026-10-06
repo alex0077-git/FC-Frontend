@@ -128,38 +128,43 @@ class _FlightMap extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final satellite = ref.watch(mapViewModeProvider) == MapViewMode.satellite;
-    return FlutterMap(
-      options: const MapOptions(initialCenter: defaultMapCenter, initialZoom: 17),
-      children: [
-        const MapTileLayer(),
-        if (telemetry != null)
-          MarkerLayer(
-            markers: [
-              Marker(
-                point: LatLng(telemetry!.latitude, telemetry!.longitude),
-                width: 36,
-                height: 36,
-                child: _DroneMarker(headingDegrees: telemetry!.heading),
-              ),
-            ],
-          ),
-        const MapStyleToggle(),
-        Align(
-          alignment: Alignment.bottomRight,
-          child: ColoredBox(
-            color: const Color(0xCC121A2B),
-            child: Padding(
-              padding: const EdgeInsets.all(4),
-              child: Text(
-                satellite ? 'Tiles © Esri' : '© OpenStreetMap contributors',
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(fontSize: 11, color: Colors.white),
+    return MapModeStack(
+      map: FlutterMap(
+        options: const MapOptions(
+          initialCenter: defaultMapCenter,
+          initialZoom: 17,
+        ),
+        children: [
+          const MapTileLayer(),
+          if (telemetry != null)
+            MarkerLayer(
+              markers: [
+                Marker(
+                  point: LatLng(telemetry!.latitude, telemetry!.longitude),
+                  width: 36,
+                  height: 36,
+                  child: _DroneMarker(headingDegrees: telemetry!.heading),
+                ),
+              ],
+            ),
+          Align(
+            alignment: Alignment.bottomRight,
+            child: ColoredBox(
+              color: const Color(0xCC121A2B),
+              child: Padding(
+                padding: const EdgeInsets.all(4),
+                child: Text(
+                  satellite ? 'Tiles © Esri' : '© OpenStreetMap contributors',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 11, color: Colors.white),
+                ),
               ),
             ),
           ),
-        ),
-      ],
+        ],
+      ),
+      overlays: const [MapStyleToggle()],
     );
   }
 }

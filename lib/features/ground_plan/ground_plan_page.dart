@@ -1320,10 +1320,8 @@ class _PlanMapState extends State<_PlanMap> {
           };
     final points = _displayPoints();
 
-    return Stack(
-      fit: StackFit.expand,
-      children: [
-        RepaintBoundary(
+    return MapModeStack(
+      map: RepaintBoundary(
           child: FlutterMap(
           mapController: widget.controller,
           options: MapOptions(
@@ -1477,6 +1475,7 @@ class _PlanMapState extends State<_PlanMap> {
           ],
           ),
         ),
+      overlays: [
         const MapStyleToggle(),
         Positioned(
           left: 12,

@@ -1,4 +1,4 @@
-﻿import 'package:fc_frontend/core/geometry/area_math.dart';
+import 'package:fc_frontend/core/geometry/area_math.dart';
 import 'package:fc_frontend/core/map/map_view.dart';
 import 'package:fc_frontend/core/theme/app_theme.dart';
 import 'package:fc_frontend/core/widgets/coverage_lines.dart';
@@ -11,7 +11,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:latlong2/latlong.dart';
-
 
 class JobExecutionPage extends ConsumerStatefulWidget {
   const JobExecutionPage({super.key});
@@ -76,65 +75,68 @@ class _JobMap extends StatelessWidget {
         LatLng(point.latitude, point.longitude),
     ];
 
-    return RepaintBoundary(
-      child: FlutterMap(
-      mapController: controller,
-      options: MapOptions(
-        initialCenter: drone ?? (boundary.isEmpty ? defaultMapCenter : boundary.first),
-        initialZoom: 17,
-        onMapReady: () => _frame(boundary),
-        interactionOptions: mapGestureOptions(),
-      ),
-      children: [
-        const MapTileLayer(),
-        if (boundary.length >= 3)
-          PolygonLayer(
-            polygons: [
-              Polygon(
-                points: boundary,
-                color: AppTheme.primary.withValues(alpha: 0.16),
-                borderColor: AppTheme.primary,
-                borderStrokeWidth: 2,
-              ),
-            ],
+    return MapModeStack(
+      map: RepaintBoundary(
+        child: FlutterMap(
+          mapController: controller,
+          options: MapOptions(
+            initialCenter:
+                drone ?? (boundary.isEmpty ? defaultMapCenter : boundary.first),
+            initialZoom: 17,
+            onMapReady: () => _frame(boundary),
+            interactionOptions: mapGestureOptions(),
           ),
-        if (mission.coverageLines.isNotEmpty)
-          PolylineLayer(
-            polylines: coveragePolylines(
-              mission.coverageLines,
-              paths: mission.coveragePaths,
-              highlightedIndex: activeIndex,
+          children: [
+            const MapTileLayer(),
+            if (boundary.length >= 3)
+              PolygonLayer(
+                polygons: [
+                  Polygon(
+                    points: boundary,
+                    color: AppTheme.primary.withValues(alpha: 0.16),
+                    borderColor: AppTheme.primary,
+                    borderStrokeWidth: 2,
+                  ),
+                ],
+              ),
+            if (mission.coverageLines.isNotEmpty)
+              PolylineLayer(
+                polylines: coveragePolylines(
+                  mission.coverageLines,
+                  paths: mission.coveragePaths,
+                  highlightedIndex: activeIndex,
+                  activeSplit: mission.activeSplit,
+                ),
+                simplificationTolerance: 0,
+              ),
+            ...obstacleMapLayers(obstacles: mission.obstacles, unit: areaUnit),
+            ...waypointPathMarkers(
+              mission.waypoints,
               activeSplit: mission.activeSplit,
             ),
-            simplificationTolerance: 0,
-          ),
-        ...obstacleMapLayers(obstacles: mission.obstacles, unit: areaUnit),
-        ...waypointPathMarkers(
-          mission.waypoints,
-          activeSplit: mission.activeSplit,
-        ),
-        const MapStyleToggle(),
-        if (drone != null)
-          MarkerLayer(
-            markers: [
-              Marker(
-                point: drone!,
-                width: 28,
-                height: 28,
-                child: const DecoratedBox(
-                  decoration: BoxDecoration(
-                    color: AppTheme.primary,
-                    shape: BoxShape.circle,
-                    border: Border.fromBorderSide(
-                      BorderSide(color: Colors.white, width: 2),
+            if (drone != null)
+              MarkerLayer(
+                markers: [
+                  Marker(
+                    point: drone!,
+                    width: 28,
+                    height: 28,
+                    child: const DecoratedBox(
+                      decoration: BoxDecoration(
+                        color: AppTheme.primary,
+                        shape: BoxShape.circle,
+                        border: Border.fromBorderSide(
+                          BorderSide(color: Colors.white, width: 2),
+                        ),
+                      ),
                     ),
                   ),
-                ),
+                ],
               ),
-            ],
-          ),
-      ],
+          ],
+        ),
       ),
+      overlays: const [MapStyleToggle()],
     );
   }
 
